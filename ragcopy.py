@@ -61,7 +61,7 @@ def load_documents(docs_dir:str) -> list[str]:
     return documents
 
 #Chunk Documents
-def chunk_text(text:str,source:str,chunk_size:int=CHUNK_SIZE,chunk_overlap:int = CHUNK_OVERLAP) -> list[dict]:
+def chunk_text(text:str,source:str,chunk_size:int=CHUNK_SIZE,overlap:int = CHUNK_OVERLAP) -> list[dict]:
     """
     Split text into overlapping chunks with metadata.
     
@@ -102,5 +102,88 @@ def chunk_text(text:str,source:str,chunk_size:int=CHUNK_SIZE,chunk_overlap:int =
         table_type = "bridge"
     elif "control" in upper.lower():
         table_type = "control"
+
+    #Chunking logic
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        
+
+        #Try to break at a clean boundary,to increase accuracy
+        if end < len(text):
+
+            # We want the LAST newline in the chunk so we break
+            # at the end of a line, not the beginning to find the end boundary 
+            last_newline = chunk.rfind("\n")
+            last_period = chunk.rfind(". ")
+            #rfine return location in str, breakpoint find the last match from left
+            break_point = max(last_newline,last_period)
+            #we use 0.3 because if the newline is too early, you would get tiny chunks, which is bad for embeddings.
+            if break_point > chunk_size * 0.3:
+                    chunk = chunk[: break_point + 1]
+                    end = start + break_point + 1
+        stripped = chunk.strip()
+        if stripped:
+            chunks.append(
+                {
+                    "text":stripped,
+                    "source":source,
+                    "chunk_index":len(chunks),
+                    "table_name":table_name.upper(),
+                    "table_type":table_type,
+                    "doc_type":doc_type,
+
+                }
+            )
+        start = end - overlap
+    return chunks
+
+
+#Store in ChromaDB/Building vector store
+
+def build_vector_store(chunks:list[dict])->chromadb.Collection:
+    """
+    Store chunks with metadata in Chromadb
+    """
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+    collection = client.get_or_create_collection(
+        name = COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    ## Each position corresponds to the same chunk,e.g.:
+    #   ids[0], documents[0], metadatas[0] → chunk 0
+    #   ids[1], documents[1], metadatas[1] → chunk 1
+    ids =[]
+    documents = []
+    metadatas = []
+
+    for i,chunk in enumerate(chunks):
+        ids.append(f"chunk_{i}")
+        documents.append(chunk["text"])
+        metadatas.append({
+            "source": chunk["source"],
+            "chunk_index": chunk["chunk_index"],
+            "table_name": chunk["table_name"],
+            "table_type": chunk["table_type"],
+            "doc_type": chunk["doc_type"],
+        })
+    collection.add(ids = ids,documents=documents,metadatas=metadatas)
+    print(f"Stored {len(chunks)} chunks in ChromaDB")
+    return collection
+
+
+#Retrieve
+
+
+
+        
 
 
