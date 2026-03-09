@@ -181,6 +181,10 @@ def build_vector_store(chunks:list[dict])->chromadb.Collection:
 
 
 #Retrieve
+def retrieve(collection:chromadb.Collection, query:str,top_k:int = TOP_K,
+             table_name:str = None, table_type:str = None):
+    """Find relevant chunks, optionally filtered"""
+    
 
 
 
