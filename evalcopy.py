@@ -282,6 +282,267 @@ def run_evaluation(
         use_llm_judge: bool = False,
         top_k: int = TOP_K,
 ) -> list[str]:
+     """
+    Run every eval question through the full RAG pipeline and score it.
+
+    THE EVALUATION LOOP (what happens for each question)
+    ────────────────────────────────────────────────────
+    For EACH of the 20 questions:
+    
+      Step 1: extract_table_name()   → Detect which table the question asks about
+      Step 2: retrieve()             → Find relevant chunks in ChromaDB  
+      Step 3: ask_claude()           → Send question + chunks to Claude, get answer
+      Step 4: score_keyword()        → Check for expected keywords in answer
+      Step 5: score_edge_case()      → Special scoring for "I don't know" questions
+      Step 6: score_with_llm_judge() → Optional: ask Claude to grade the answer
+      Step 7: Record EVERYTHING      → Save all data for later analysis
+
+    CRITICAL POINT ABOUT TESTING THE REAL CODE PATH
+    ────────────────────────────────────────────────
+    Steps 1-3 call the EXACT SAME functions in current chatbox
+    imported them from rag.py. If eval.py had its own retrieval
+    code
+
+    PARAMETERS
+    ──────────
+    questions:      List of eval question dicts from load_eval_questions()
+    collection:     Your ChromaDB collection (from build_vector_store())
+    known_tables:   List of table names for extract_table_name()
+    use_llm_judge:  If True, also run LLM-as-judge scoring (costs API $)
+    top_k:          How many chunks to retrieve (default from rag.py, overridable)
+
+    RETURNS
+    ───────
+    A list of result dicts, one per question. Each contains:
+    the question, answer, all scores, timing data, and retrieved sources.
+    This entire list gets saved to CSV by save_results().
+    """
+     results = []
+     total = len(questions)
+
+     for i,q in enumerate(questions):
+         question_id = q['question_id']
+         category = q['category']
+         question = q['question']
+         expected_keywords = q['expected_keywords']
+         expected_table = q.get("expected_table","")
+
+         print(f"\n[{i+1}/{total}] {question_id}: {question[:60]}...")
+
+         #Step 1 Table name detection
+         detected_table = extract_table_name(question,known_tables)
+
+         #Step 2 Retrieval - Finding relevant chunks
+         start_time = time.time()
+         chunks = retrieve(collection,question,top_k=top_k,table_name=detected_table)
+         retrieval_time = time.time() - start_time
+
+         retrieved_sources = [
+            {
+                "table_name": c.get("table_name", ""),
+                "doc_type": c.get("doc_type", ""),
+                "text_preview": c["text"][:150],
+            }
+            for c in chunks
+        ]
+         
+         #Step3 Generation
+         generation_start = time.time()
+         try:
+             answer = ask_claude(question,chunks)
+         except Exception as e:
+             answer = f"Error {e}"
+         generation_time = time.time() - generation_start
+         total_time = retrieval_time + generation_time
+
+         print(f"  Answer ({total_time:.1f}s): {answer[:100]}...")
+
+         #Step 4 Keyword scoring
+         #This is a free method so always run as a baseline
+         keyword_result = score_keyword(answer, expected_keywords)
+         print(f"  Keyword score: {keyword_result['score']} "
+              f"(matched: {keyword_result['matched']}, "
+              f"missed: {keyword_result['missed']})")
+         #Step 5 EDGE CASE SCORING (only for edge_case questions)
+         edge_result = score_edge_case(answer, category)
+         if edge_result:
+            print(f"  Edge case: {edge_result['score']} ({edge_result['label']})")
+
+         #Step 6 LLM Scoring
+         judge_result = None
+
+         if use_llm_judge:
+             judge_result = score_with_llm_judge(
+                 question,answer,expected_keywords,category
+             )
+             if judge_result["score"] is not None:
+                print(f"  Judge: {judge_result['raw_score']}/5 "
+                      f"— {judge_result['explanation']}")
+         results.append({
+            "question_id": question_id,
+            "category": category,
+            "question": question,
+            "expected_table": expected_table,
+            "detected_table": detected_table or "",
+            "answer": answer,
+            # ─── Keyword scores ───
+            "keyword_score": keyword_result["score"],
+            "keyword_matched": ", ".join(keyword_result["matched"]),
+            "keyword_missed": ", ".join(keyword_result["missed"]),
+            # ─── Edge case scores (empty string if not applicable) ───
+            "edge_case_score": edge_result["score"] if edge_result else "",
+            "edge_case_label": edge_result["label"] if edge_result else "",
+            # ─── Judge scores (empty string if judge not used) ───
+            "judge_score": judge_result["score"] if judge_result else "",
+            "judge_raw": judge_result["raw_score"] if judge_result else "",
+            "judge_explanation": judge_result["explanation"] if judge_result else "",
+            # ─── Timing data (seconds) ───
+            "retrieval_time_s": round(retrieval_time, 2),
+            "generation_time_s": round(generation_time, 2),
+            "total_time_s": round(total_time, 2),
+            # ─── Retrieval debug data ───
+            "num_chunks_retrieved": len(chunks),
+            "retrieved_sources": json.dumps(retrieved_sources),
+        })
+     return results
+
+#SECTION 6: SAVE RESULTS TO CSV
+def save_results(results: list[dict], tag: str = "") -> str:
+    """Format: eval_results/eval_results_YYYYMMDD_HHMMSS_tag.csv"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag_suffix = f"_{tag}" if tag else ""
+    filename = f"eval_results_{timestamp}{tag_suffix}.csv"
+
+    os.mkdir("eval_results",exist_ok = True)
+    filepath = os.path.join("eval_results",filename)
+
+    #Write to CSV
+    if results:
+        fieldnames = results[0].keys()
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+
+    print(f"\nResults saved to: {filepath}")
+    return filepath
+
+#SECTION 7: PRINT SUMMARY REPORT 
+def print_summary(results: list[dict]):
+    """
+    Print a human-readable dashboard of eval results.
+    
+    Shows five sections:
+    1. Overall keyword score (single number system health check)
+    2. Per-category breakdown (WHERE is the system weak?)
+    3. Table detection accuracy (is extract_table_name working?)
+    4. Worst performing questions (WHAT to fix next?)
+    5. Timing statistics (HOW FAST is the system?)
+    """
+    if not results:
+        print("No results to summarize.")
+        return
+
+    print("\n" + "=" * 60)
+    print("EVALUATION SUMMARY")
+    print("=" * 60)
+
+    #1. Overall keyword score
+    keyword_scores = [r["keyword_score"] for r in results]
+    avg_keyword = sum(keyword_scores) / len(keyword_scores)
+    print(f"\nOverall Keyword Score: {avg_keyword:.2f} / 1.00")
+
+    #Per category breakdown
+    categories = sorted(set(r['category'] for r in results))
+    print(f"  {'Category':<20} {'Avg Score':>10} {'Count':>8}")
+    print(f"  {'-'*20} {'-'*10} {'-'*8}")
+
+    for cat in categories:
+        cat_results = [r for r in results if r["category"] == cat]
+        if cat == "edge_case":
+            cat_scores = [
+                r["edge_case_score"] for r in cat_results
+                if r["edge_case_score"] != ""
+            ]
+        else:
+            cat_scores = [r["keyword_score"] for r in cat_results]
+        avg = sum(cat_scores) / len(cat_scores) if cat_scores else 0
+        print(f"  {cat:<20} {avg:>10.2f} {len(cat_results):>8}")
+
+    #LLM Judge score
+    judge_scores = [
+        r["judge_score"] for r in results
+        if r["judge_score"] != "" and r["judge_score"] is not None
+    ]
+    if judge_scores:
+        avg_judge = sum(judge_scores) / len(judge_scores)
+        print(f"\nLLM Judge Score: {avg_judge:.2f} / 1.00")
+
+    #Table detection
+    detection_results = [
+        r for r in results
+        if r["expected_table"] and r["expected_table"] not in ("NONE", "MULTIPLE")
+    ]
+    if detection_results:
+        correct_detections = sum(
+            1 for r in detection_results
+            if r["detected_table"] == r["expected_table"]
+        )
+        detection_rate = correct_detections / len(detection_results)
+        print(f"\nTable Detection Accuracy: {detection_rate:.0%} "
+              f"({correct_detections}/{len(detection_results)})")
+    # Worst performing questions
+    print(f"\nWorst Performing Questions (fix these first):")
+
+    sorted_results = sorted(results, key=lambda r: r["keyword_score"])
+
+    for r in sorted_results[:5]:
+        score_display = r["keyword_score"]
+        if r["category"] == "edge_case" and r["edge_case_label"]:
+            score_display = f"{r['edge_case_score']} ({r['edge_case_label']})"
+
+        print(f"  {r['question_id']}: score={score_display}")
+        print(f"    Q: {r['question'][:70]}...")
+        if r["keyword_missed"]:
+            print(f"    Missing keywords: {r['keyword_missed']}")
+    #timing
+    times = [r["total_time_s"] for r in results]
+    avg_time = sum(times) / len(times)
+    max_time = max(times)
+    print(f"\nTiming: avg={avg_time:.1f}s, max={max_time:.1f}s per question")
+
+    print("\n" + "=" * 60)
+
+#SECTION 8: COMPARISON TOOL
+
+
+     
+def compare_runs(file_a:str,file_b:str):
+    def load_results(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            return {row["question_id"]: row for row in reader}
+    results_a = load_results(file_a)
+    results_b = load_results(file_b)
+
+    common_ids = sorted(set(results_a.keys())&set(results_b.keys()))
+    print(f"\nComparing:")
+    print(f"  A: {os.path.basename(file_a)}")
+    print(f"  B: {os.path.basename(file_b)}")
+    print(f"\n{'ID':<6} {'Score A':>8} {'Score B':>8} {'Delta':>8} {'Status'}")
+    print("-" * 50)
+
+    improved = 0
+    regressed= 0
+    same = 0
+
+    
+
+         
+         
+
+         
     
 
 
