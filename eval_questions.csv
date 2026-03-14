@@ -1,0 +1,21 @@
+question_id,category,question,expected_answer_keywords,expected_table,difficulty,notes
+Q01,simple_lookup,What is the grain of FACT_STORE_INVENTORY_INTRA?,"grain,store,product,day,daily",FACT_STORE_INVENTORY_INTRA,easy,Tests basic table summary retrieval
+Q02,simple_lookup,What is the source system for DIM_PRODUCT?,"SAP,CDS,source",DIM_PRODUCT,easy,Tests source system identification
+Q03,simple_lookup,What columns are in DIM_STORE?,"SK_STORE_KEY,STORE_CODE,STORE_NAME",DIM_STORE,easy,Tests column listing from column doc
+Q04,simple_lookup,What is the refresh cadence for FACT_SALES_ORDER?,"daily,refresh,incremental",FACT_SALES_ORDER,easy,Tests refresh metadata retrieval
+Q05,simple_lookup,What data type is the SK_PRODUCT_KEY column in DIM_PRODUCT?,"NUMBER,INT,INTEGER,BIGINT",DIM_PRODUCT,easy,Tests specific column detail retrieval
+Q06,cross_entity,Which dimension tables are referenced by FACT_STORE_INVENTORY_INTRA?,"DIM_STORE,DIM_PRODUCT,DIM_DATE",FACT_STORE_INVENTORY_INTRA,medium,Tests cross-table relationship understanding
+Q07,cross_entity,What source columns from SAP map to DIM_STORE?,"SAP,CDS,MATNR,WERKS,mapping",DIM_STORE,medium,Tests source-to-target mapping comprehension
+Q08,cross_entity,Which fact tables use DIM_DATE as a dimension?,"FACT_STORE_INVENTORY,FACT_SALES",DIM_DATE,medium,Tests reverse lookup across tables
+Q09,cross_entity,Compare the grain of FACT_SALES_ORDER and FACT_STORE_INVENTORY_INTRA,"grain,order,store,product,line",MULTIPLE,hard,Tests comparison across two table summaries
+Q10,cross_entity,What is the full data lineage for FACT_SALES_ORDER from source to gold layer?,"SAP,CDS,Bronze,Platinum,Gold,ADF,dbt,Snowflake",FACT_SALES_ORDER,hard,Tests pipeline/architecture understanding
+Q11,edge_case,What is the grain of FACT_CUSTOMER_RETURNS?,I don't have that information,NONE,easy,Table does NOT exist - tests hallucination resistance
+Q12,edge_case,How many rows are in DIM_PRODUCT?,I don't have that information,NONE,medium,Row counts are NOT in STTM docs - tests boundary awareness
+Q13,edge_case,What is the SLA for FACT_SALES_ORDER refresh?,I don't have that information,NONE,medium,SLA info likely NOT in STTM - tests I-dont-know behavior
+Q14,edge_case,Who owns the DIM_STORE table?,I don't have that information,NONE,easy,Ownership not in STTM - tests scope awareness
+Q15,simple_lookup,List all bridge tables in the warehouse,"BRIDGE,bridge",BRIDGE,easy,Tests table_type filtering
+Q16,cross_entity,What transformations happen between Bronze and Gold for DIM_PRODUCT?,"Bronze,Platinum,Gold,dbt,transform",DIM_PRODUCT,hard,Tests architecture + table knowledge combined
+Q17,simple_lookup,What is the primary key of FACT_STORE_INVENTORY_INTRA?,"SK_,KEY,primary",FACT_STORE_INVENTORY_INTRA,easy,Tests key column identification
+Q18,cross_entity,Which tables have columns sourced from MyPOS?,"MyPOS,source,POS",MULTIPLE,hard,Tests cross-table source system search
+Q19,edge_case,Can you show me the ERD for the sales domain?,I don't have that information,NONE,medium,ERDs are NOT text docs - tests format awareness
+Q20,edge_case,What is the difference between FACT_SALES_ORDER and FACT_SALES_ORDER_V2?,I don't have that information,NONE,medium,V2 likely doesnt exist - tests hallucination on similar names

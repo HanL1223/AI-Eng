@@ -1,44 +1,32 @@
-"""
-rag.py — RAG Chatbot with STTM-Aware Loading
-==============================================
+"""ragcopy.py — RAG Chatbot with STTM-Aware Loading
 Drop this + sttm_loader.py into your rag-chatbot/ folder.
-Put your STTM Excel file in docs/
+Put  STTM Excel file in docs/
 Run: python rag.py
-
-Changes from v2:
-- Uses sttm_loader.py for smart Excel extraction
-- Each entity becomes 2 docs (summary + columns) instead of 1 messy blob
-- Still loads .txt and .md files normally
 """
 
 import os
 import glob
 import anthropic
 import chromadb
-
-# ─────────────────────────────────────────────
-# PYTHON REFRESHER: Importing from your own file
-# ─────────────────────────────────────────────
-# This imports the function from sttm_loader.py
-# The file must be in the same folder as rag.py
+# Import sttm loading function to handle complex excel
 from sttm_loader import load_sttm_workbook
 
-# ─────────────────────────────────────────────
+
 # CONFIG
-# ─────────────────────────────────────────────
 DOCS_DIR = "docs"
 CHROMA_DIR = "chroma_db"
-COLLECTION_NAME = "my_docs"
-CHUNK_SIZE = 800                     # Bigger now — STTM docs are pre-structured
+COLLECTION_NAME = 'my_docs'
+CHUNK_SIZE = 800    
 CHUNK_OVERLAP = 100
 TOP_K = 3
 MODEL = "claude-sonnet-4-5-20250929"
 
 
-# ─────────────────────────────────────────────
-# STEP 1: Load all documents
-# ─────────────────────────────────────────────
-def load_documents(docs_dir: str) -> list[dict]:
+
+
+#Loading all documents
+
+def load_documents(docs_dir:str) -> list[str]:
     """
     Load .txt, .md files normally.
     Load .xlsx files using the smart STTM loader.
@@ -53,30 +41,27 @@ def load_documents(docs_dir: str) -> list[dict]:
     """
     documents = []
 
-    # --- Text and Markdown files ---
-    for pattern in ["*.txt", "*.md"]:
-        for filepath in glob.glob(os.path.join(docs_dir, pattern)):
-            with open(filepath, "r", encoding="utf-8") as f:
+    for patterns in ["*.txt","*.md"]:
+        for filepath in glob.glob(os.path.join(docs_dir,patterns)):
+            with open(filepath,'r',encoding='utf-8') as f:
                 content = f.read()
-            documents.append({
-                "content": content,
-                "source": os.path.basename(filepath),
-            })
-            print(f"  📄 Loaded: {os.path.basename(filepath)} ({len(content)} chars)")
-
-    # --- Excel files (using smart STTM loader) ---
-    for filepath in glob.glob(os.path.join(docs_dir, "*.xlsx")):
-        print(f"\n  📊 Loading Excel: {os.path.basename(filepath)}")
+            documents.append(
+                {
+                    "content":content,
+                    "source":os.path.basename(filepath),
+                }
+            )
+            print(f"Loaded {os.path.basename(filepath)}: ({len(content)} chars)")
+    #Excel files using sttm loader
+    for filepath in glob.glob(os.path.join(docs_dir,"*.xlsx")):
+        print(f"Loading Excel: {os.path.basename(filepath)})")
         excel_docs = load_sttm_workbook(filepath)
-        documents.extend(excel_docs)  # extend, not append!
+        documents.extend(excel_docs)
 
     return documents
 
-
-# ─────────────────────────────────────────────
-# STEP 2: Chunk documents
-# ─────────────────────────────────────────────
-def chunk_text(text: str, source: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[dict]:
+#Chunk Documents
+def chunk_text(text:str,source:str,chunk_size:int=CHUNK_SIZE,overlap:int = CHUNK_OVERLAP) -> list[dict]:
     """
     Split text into overlapping chunks with metadata.
     
@@ -90,29 +75,25 @@ def chunk_text(text: str, source: str, chunk_size: int = CHUNK_SIZE, overlap: in
     str.split("__") breaks on double underscore:
         "a__b__c".split("__") → ["a", "b", "c"]
     """
-    # Parse metadata from source name
+    #parsee metdata from source name
     parts = source.split("__")
-    
-    if len(parts) >= 3:
-        # From STTM loader: "filename__SheetName__summary" or "__columns"
+
+    if len(parts) >=3:
+        #From STTM loader: "filename__SheetName__summary" or "__columns"
         table_name = parts[1].strip()
-        doc_type = parts[2]  # "summary" or "columns"
+        doc_type = parts[2] #summary or columns
     elif len(parts) == 2:
         table_name = parts[1].strip()
         doc_type = "unknown"
     else:
-        # Regular text file: "DIM_PRODUCT.txt"
         table_name = os.path.splitext(source)[0]
         doc_type = "text"
 
     # Guess table type from naming convention
+    # Sttm source only got fact, dim and bridge tables
     table_type = "unknown"
-    upper = table_name.upper()
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: elif chains
-    # ─────────────────────────────────────────────────────────
-    # Python doesn't have switch/case (well, it has match/case in 3.10+
-    # but elif chains are still more common in practice)
+    upper = table_name.upper() #short for table_name.upper()
+
     if upper.startswith("FACT") or upper.startswith("FACT_"):
         table_type = "fact"
     elif upper.startswith("DIM") or upper.startswith("DIM_"):
@@ -122,83 +103,69 @@ def chunk_text(text: str, source: str, chunk_size: int = CHUNK_SIZE, overlap: in
     elif "control" in upper.lower():
         table_type = "control"
 
-    # ─────────────────────────────────────────────────────────
-    # Chunking logic
-    # ─────────────────────────────────────────────────────────
+    #Chunking logic
     chunks = []
     start = 0
 
     while start < len(text):
         end = start + chunk_size
         chunk = text[start:end]
+        
 
-        # Try to break at a clean boundary
+        #Try to break at a clean boundary,to increase accuracy
         if end < len(text):
-            # ─────────────────────────────────────────────────
-            # PYTHON REFRESHER: rfind() vs find()
-            # ─────────────────────────────────────────────────
-            # find() searches LEFT to RIGHT → first match
-            # rfind() searches RIGHT to LEFT → last match
+
             # We want the LAST newline in the chunk so we break
-            # at the end of a line, not the beginning
+            # at the end of a line, not the beginning to find the end boundary 
             last_newline = chunk.rfind("\n")
             last_period = chunk.rfind(". ")
-            break_point = max(last_newline, last_period)
+            #rfine return location in str, breakpoint find the last match from left
+            break_point = max(last_newline,last_period)
+            #we use 0.3 because if the newline is too early, you would get tiny chunks, which is bad for embeddings.
             if break_point > chunk_size * 0.3:
-                chunk = chunk[: break_point + 1]
-                end = start + break_point + 1
-
+                    chunk = chunk[: break_point + 1]
+                    end = start + break_point + 1
         stripped = chunk.strip()
-        if stripped:  # Don't create empty chunks
-            chunks.append({
-                "text": stripped,
-                "source": source,
-                "chunk_index": len(chunks),
-                "table_name": table_name.upper(),
-                "table_type": table_type,
-                "doc_type": doc_type,   # "summary", "columns", or "text"
-            })
+        if stripped:
+            chunks.append(
+                {
+                    "text":stripped,
+                    "source":source,
+                    "chunk_index":len(chunks),
+                    "table_name":table_name.upper(),
+                    "table_type":table_type,
+                    "doc_type":doc_type,
 
+                }
+            )
         start = end - overlap
-
     return chunks
 
 
-# ─────────────────────────────────────────────
-# STEP 3: Store in ChromaDB
-# ─────────────────────────────────────────────
-def build_vector_store(chunks: list[dict]) -> chromadb.Collection:
-    """Store chunks with metadata in ChromaDB."""
-    client = chromadb.PersistentClient(path=CHROMA_DIR)
+#Store in ChromaDB/Building vector store
 
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: try/except (exception handling)
-    # ─────────────────────────────────────────────────────────
-    # try: runs the code
-    # except Exception: catches ANY error and runs the fallback
-    # We use this to delete the old collection (it might not exist yet)
+def build_vector_store(chunks:list[dict])->chromadb.Collection:
+    """
+    Store chunks with metadata in Chromadb
+    """
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
-        pass  # "pass" means "do nothing" — it's a no-op placeholder
-
+        pass
     collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
+        name = COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
 
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: Building parallel lists
-    # ─────────────────────────────────────────────────────────
-    # ChromaDB wants three separate lists: ids, documents, metadatas
-    # Each position corresponds to the same chunk:
+    ## Each position corresponds to the same chunk,e.g.:
     #   ids[0], documents[0], metadatas[0] → chunk 0
     #   ids[1], documents[1], metadatas[1] → chunk 1
-    ids = []
+    ids =[]
     documents = []
     metadatas = []
 
-    for i, chunk in enumerate(chunks):
+    for i,chunk in enumerate(chunks):
         ids.append(f"chunk_{i}")
         documents.append(chunk["text"])
         metadatas.append({
@@ -208,126 +175,95 @@ def build_vector_store(chunks: list[dict]) -> chromadb.Collection:
             "table_type": chunk["table_type"],
             "doc_type": chunk["doc_type"],
         })
-
-    collection.add(ids=ids, documents=documents, metadatas=metadatas)
-    print(f"  💾 Stored {len(chunks)} chunks in ChromaDB")
+    collection.add(ids = ids,documents=documents,metadatas=metadatas)
+    print(f"Stored {len(chunks)} chunks in ChromaDB")
     return collection
 
 
-# ─────────────────────────────────────────────
-# STEP 4: Retrieve
-# ─────────────────────────────────────────────
-def retrieve(collection: chromadb.Collection, query: str, top_k: int = TOP_K,
-             table_name: str = None, table_type: str = None) -> list[dict]:
-    """Find relevant chunks, optionally filtered."""
-
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: Building dicts conditionally
-    # ─────────────────────────────────────────────────────────
-    # Instead of a chain of if/elif, we build the filter dict
-    # only if we have values to filter on
+#Retrieve
+def retrieve(collection:chromadb.Collection, query:str,top_k:int = TOP_K,
+            table_name:str = None, table_type:str = None):
+    """Find relevant chunks, optionally filtered"""
     where_filter = None
+    #filter conditions
     if table_name and table_type:
         where_filter = {"$and": [
-            {"table_name": {"$eq": table_name}},
-            {"table_type": {"$eq": table_type}},
+            {"table_name":{'$eq':table_name}},
+            {"table_type":{"$eq":table_type}}
         ]}
     elif table_name:
-        where_filter = {"table_name": {"$eq": table_name}}
+        where_filter = {"table_name":{'$eq':table_name}}
     elif table_type:
-        where_filter = {"table_type": {"$eq": table_type}}
-
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: ** (dictionary unpacking)
-    # ─────────────────────────────────────────────────────────
-    # function(**{"a": 1, "b": 2}) is the same as function(a=1, b=2)
-    # We build query_params as a dict then unpack it
-    query_params = {"query_texts": [query], "n_results": top_k}
+        where_filter = {"table_type":{'$eq':table_type}}
+    query_params = {"query_texts":[query],"n_results":top_k}
     if where_filter:
-        query_params["where"] = where_filter
-
+        query_params['where'] = where_filter
     try:
         results = collection.query(**query_params)
     except Exception:
-        # Fallback to unfiltered if filter fails
-        results = collection.query(query_texts=[query], n_results=top_k)
+        results = collection.query(query_texts=[query],n_results=top_k)
 
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: range(len()) vs enumerate()
-    # ─────────────────────────────────────────────────────────
-    # Both work for indexed iteration. range(len()) when you
-    # need the index to access multiple parallel lists:
     retrieved = []
     for i in range(len(results["ids"][0])):
-        retrieved.append({
-            "text": results["documents"][0][i],
-            "source": results["metadatas"][0][i]["source"],
-            "table_name": results["metadatas"][0][i].get("table_name", ""),
-            "table_type": results["metadatas"][0][i].get("table_type", ""),
-            "doc_type": results["metadatas"][0][i].get("doc_type", ""),
-            "distance": results["distances"][0][i] if results.get("distances") else None,
-        })
-
+        retrieved.append(
+            {
+                "text":results["documents"][0][i],
+                "source":results["metadatas"][0][i]['source'],
+                "table_name":results["metadatas"][0][i].get("table_name",""),
+                "table_type":results["metadatas"][0][i].get("table_type",""),
+                "doc_type":results["metadatas"][0][i].get("doc_type",""),
+                "distance":results["distances"][0][i] if results.get("distances") else None,
+            }
+        )
     return retrieved
 
 
-# ─────────────────────────────────────────────
-# STEP 5: Auto-detect table name
-# ─────────────────────────────────────────────
-def extract_table_name(query: str, known_tables: list[str]) -> str | None:
+#Table Name auto detection
+
+def extract_table_name(query:str, known_tables:list[str] ) -> str | None :
     """
     Detect table names mentioned in the user's question.
     
-    PYTHON REFRESHER: sorted() with key= parameter
-    ─────────────────────────────────────────────────
-    sorted([3,1,2]) → [1,2,3]
-    sorted(["b","a"], key=len) → sorts by string length
-    reverse=True → longest first
-    
-    We sort by length descending so "FACT_STORE_INVENTORY_INTRA"
+    Sort by length descending so "FACT_STORE_INVENTORY_INTRA"
     matches before "FACT_STORE_INVENTORY"
+
     """
     query_upper = query.upper()
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: Also try without underscores
-    # ─────────────────────────────────────────────────────────
-    # Users might type "fact store inventory" instead of "FACT_STORE_INVENTORY"
-    query_no_spaces = query_upper.replace(" ", "_")
+    query_no_spaces = query_upper.replace(" ","_") #for understand input like fact sales order vs fact_sales_order
 
-    for table in sorted(known_tables, key=len, reverse=True):
+    for table in sorted(known_tables,key=len,reverse=True):
         if table in query_upper or table in query_no_spaces:
             return table
     return None
 
 
-# ─────────────────────────────────────────────
-# STEP 6: Ask Claude
-# ─────────────────────────────────────────────
-def ask_claude(query: str, context_chunks: list[dict]) -> str:
-    """Send query + retrieved context to Claude."""
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: List comprehension to build strings
-    # ─────────────────────────────────────────────────────────
+#Claude API
+
+#First input to Claude
+
+def ask_claude(query:str,context_chunks:list[dict]) -> str:
+    """send query and retrieved context to Claude"""
+
     context_parts = []
     for chunk in context_chunks:
-        # Build a useful label from metadata
         label_parts = []
         if chunk.get("table_name"):
             label_parts.append(chunk["table_name"])
         if chunk.get("doc_type") and chunk["doc_type"] != "text":
             label_parts.append(chunk["doc_type"])
-        label = " — ".join(label_parts) if label_parts else chunk["source"]
+        label = " - ".join(label_parts) if label_parts else chunk["source"]
 
-        context_parts.append(f"[Source: {label}]\n{chunk['text']}")
+        context_parts.append(f"[Source:{label}]\n{chunk['text']}]")
 
     context = "\n\n---\n\n".join(context_parts)
 
     client = anthropic.Anthropic()
 
     message = client.messages.create(
-        model=MODEL,
+        model =MODEL,
         max_tokens=1024,
-        system="""You are a data warehouse documentation assistant for Sigma Healthcare.
+        system = """
+You are a data warehouse documentation assistant for Sigma Healthcare.
 
 You answer questions about tables, columns, mappings, and data pipelines 
 in Sigma's Snowflake data warehouse.
@@ -345,36 +281,29 @@ Rules:
 - Always cite which table/source the information came from
 - When describing a table, include: grain, key columns, source system, and refresh cadence if available
 - When listing columns, format them clearly with their types and sources
-- Be concise and direct — the user is a data engineer""",
-        messages=[
-            {
-                "role": "user",
-                "content": f"""Context from documents:
+- Be concise and direct — the user is a data engineer
+""",
+messages=[
+    {
+        "role":"user",
+        "content":f"""Context from documents:
 
 {context}
 
 ---
 
-Question: {query}""",
-            }
-        ],
+Question: {query}"""
+    }
+],
     )
-
     return message.content[0].text
 
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
+#Main
 def main():
-    print("\n🔧 RAG Chatbot — STTM-Aware Version")
-    print("=" * 45)
+    print("STTM Assistant")
+    print("="*45)
 
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: os.environ and .env loading
-    # ─────────────────────────────────────────────────────────
-    # os.environ is a dict of all environment variables
-    # .get() returns None instead of raising KeyError
     if not os.environ.get("ANTHROPIC_API_KEY"):
         env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
         if os.path.exists(env_path):
@@ -382,58 +311,49 @@ def main():
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
-                        # ─────────────────────────────────────
-                        # PYTHON REFRESHER: str.partition()
-                        # ─────────────────────────────────────
-                        # "KEY=VALUE".partition("=") → ("KEY", "=", "VALUE")
-                        # Better than split("=") when value contains "="
-                        key, _, value = line.partition("=")
+                        key,_,value = line.partition("=")
                         os.environ[key.strip()] = value.strip()
         else:
-            print("\n❌ No ANTHROPIC_API_KEY found!")
-            print("   export ANTHROPIC_API_KEY='sk-ant-...'")
+            print("API Key Not Found")
+            print("exprot/$env = ANTHROPIC_API_KEY = 'API KEY HERE' ")
             return
 
     if not os.path.exists(DOCS_DIR):
-        print(f"\n❌ No '{DOCS_DIR}/' folder found! mkdir {DOCS_DIR}")
+        print(f"\n No '{DOCS_DIR}/' folder found! mkdir {DOCS_DIR}")
         return
-
-    # Load
-    print("\n📂 Loading documents...")
+        
+    #Load Document/file
+    print("Loading raw documents")
     documents = load_documents(DOCS_DIR)
     if not documents:
-        print(f"  ⚠️  No files found in {DOCS_DIR}/")
+        print(f"No file found in {DOCS_DIR}")
         return
-    print(f"\n  📚 Total: {len(documents)} documents loaded")
+    print(f"Total {len(documents)} documents loaded")
 
-    # Chunk
-    print("\n✂️  Chunking...")
+    #Chunk
+    print("Chunking")
     all_chunks = []
     for doc in documents:
-        chunks = chunk_text(doc["content"], doc["source"])
+        chunks = chunk_text(doc["content"],doc['source'])
         all_chunks.extend(chunks)
-    print(f"  📦 {len(all_chunks)} chunks from {len(documents)} documents")
+    print(f"{len(all_chunks)} chunk from {len(documents)} documents")
 
-    # Store
-    print("\n🗄️  Building vector store...")
+    #Store
+    print("Building vector store")
     collection = build_vector_store(all_chunks)
 
-    # Get known tables
-    # ─────────────────────────────────────────────────────────
-    # PYTHON REFRESHER: set() for unique values
-    # ─────────────────────────────────────────────────────────
-    # set() removes duplicates: set([1,2,2,3]) → {1,2,3}
-    # list(set(...)) converts back to a list
+
+    #Get known table
     all_meta = collection.get()
     known_tables = sorted(list(set(
-        m.get("table_name", "")
+        m.get("table_name","")
         for m in all_meta["metadatas"]
-        if m.get("table_name") and m["table_name"].strip()
+        if m.get("table_name") and m['table_name'].strip()
     )))
-    print(f"  📋 {len(known_tables)} tables indexed")
+    print(f"  {len(known_tables)} tables indexed")
 
-    # Interactive loop
-    print("\n✅ Ready! Ask questions about your STTM documents.")
+    #Interactive loop/UI
+    print("\n Ready! Ask questions about your STTM documents.")
     print("   Commands: 'debug' | 'tables' | 'quit'\n")
 
     debug_mode = False
@@ -442,53 +362,59 @@ def main():
         try:
             query = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n👋 Bye!")
+            print("\n Bye!")
             break
-
         if not query:
             continue
         if query.lower() == "quit":
-            print("👋 Bye!")
             break
-        if query.lower() == "debug":
+        if query.lower == 'debug':
             debug_mode = not debug_mode
-            print(f"  🔍 Debug: {'ON' if debug_mode else 'OFF'}")
+            print(f"Debug {'ON' if debug_mode else 'OFF'}")
             continue
         if query.lower() == "tables":
-            # ─────────────────────────────────────────────────
-            # PYTHON REFRESHER: Formatted printing in columns
-            # ─────────────────────────────────────────────────
-            # f"{var:<30}" left-aligns in a 30-char field
+        # ─────────────────────────────────────────────────
+        # PYTHON REFRESHER: Formatted printing in columns
+        # ─────────────────────────────────────────────────
+        # f"{var:<30}" left-aligns in a 30-char field
             for i, t in enumerate(known_tables):
                 print(f"  {i+1:2d}. {t}")
             continue
 
         # Auto-detect table
-        detected = extract_table_name(query, known_tables)
+        detected = extract_table_name(query,known_tables)
         if debug_mode and detected:
-            print(f"  🎯 Detected: {detected}")
-
-        # Retrieve
-        chunks = retrieve(collection, query, table_name=detected)
+            print(f"Detected: {detected}")
+        chunks = retrieve(collection,query,table_name=detected)
 
         if debug_mode:
-            print(f"\n  📎 {len(chunks)} chunks retrieved:")
+            print(f"\n {len(chunks)} chunks retrieved:")
             for i, c in enumerate(chunks):
                 dist = f" d={c['distance']:.3f}" if c["distance"] else ""
                 print(f"    [{i+1}] {c['table_name']} ({c['doc_type']}){dist}")
                 print(f"        {c['text'][:100]}...")
             print()
 
-        # Answer
         try:
-            answer = ask_claude(query, chunks)
+            answer = ask_claude(query,chunks)
             print(f"\nClaude: {answer}\n")
         except anthropic.AuthenticationError:
-            print("\n❌ Invalid API key.")
+            print("\n Invalid API key.")
             break
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\n Error: {e}")
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+    
+
+
+
+        
+
+
