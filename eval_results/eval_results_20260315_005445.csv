@@ -1,0 +1,213 @@
+question_id,category,question,expected_table,detected_table,answer,keyword_score,keyword_matched,keyword_missed,edge_case_score,edge_case_label,judge_score,judge_raw,judge_explanation,retrieval_time_s,generation_time_s,total_time_s,num_chunks_retrieved,retrieved_sources
+Q01,simple_lookup,What is the grain of FACT_STORE_INVENTORY_INTRA?,FACT_STORE_INVENTORY_INTRA,,"I don't have that information in the loaded documents.
+
+The context provided includes information about:
+- **FACT_WH_LOC_INVENTORY_INTRA** (Warehouse Location Inventory) - grain is ""SOH position of each Product in each Warehouse Management Location""
+- **FACT_WAREHOUSE_INVENTORY_INTRA** (mentioned in control table)
+- **FACT_WH_LOC_REPLENISHMENT** (Warehouse Location Replenishment)
+
+However, there is no documentation for **FACT_STORE_INVENTORY_INTRA** specifically in the provided context. If you're looking for store-level inventory facts, I would need the table summary document for that specific table to provide accurate grain information.",0.6,"GRAIN, STORE, PRODUCT","DAY, DAILY",,,,,,0.08,4.57,4.65,3,"[{""table_name"": ""FACT_WH_LOC_INVENTORY_INTRA"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Inventory_intra\nDescription: The SOH position of each Product in each Warehosue Management Location grain snapshotted c""}, {""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""s Area: Store Inbound | Object Name: Fact_Store_Purchase_Invoice | Type: Fact | Statuses: Finalised\nObject Number: 7 | Business Area: Inventory Manage""}, {""table_name"": ""FACT_WH_LOC_REPLENISHMENT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Replenishment\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the""}]"
+Q02,simple_lookup,What is the source system for DIM_PRODUCT?,DIM_PRODUCT,DIM_PRODUCT,"Based on the documentation for DIM_PRODUCT:
+
+**Source System:** PDB08.StockDB
+
+The table is sourced from the PDB08 system, specifically the StockDB database. All columns in DIM_PRODUCT come from various tables within `PDB08.StockDb.dbo` schema, including:
+- Products
+- ProductsDrugInformation  
+- DimensionValues
+- Dimensions
+
+The table contains dimension data and attributes for all products, with a **full load** refresh type.",0.33,SOURCE,"SAP, CDS",,,,,,0.1,3.46,3.56,3,"[{""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Product\nDescription: Contains the dimersion data and attributes for all products. Each row represents a unique product, enriched with brand""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""tockdb.stockdb.dbo.DimensionValues dv ON dv.DimensionValu\"" | Gold Layer Mapping=ProductCategoryCode\n  Generic | type=bit | src_system=PDB08 | src_db=S""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""c_db=StockDb | src_schema=dbo | src_table=Products | src_col=LockiePLU | Gold Layer Mapping=PLUCode\n  X_Product | type=bit | src_system=PDB08 | src_db""}]"
+Q03,simple_lookup,What columns are in DIM_STORE?,DIM_STORE,DIM_STORE,"Based on the documentation for **DIM_STORE**, here are the columns (showing 8 of 58 total):
+
+**Key Columns:**
+- `StoreCode` (int) - PRIMARY KEY - Unique Store Code
+- `BranchID` (char) - Formatted BranchID into 4 digit string with B prefix
+
+**Attribute Columns:**
+- `StoreName` (int) - Store name
+- `StoreEmail` (varchar) - Store email address
+- `StorePhone` (varchar) - Store phone number
+- `StoreFax` (nvarchar) - Store fax number
+- `StoreLatitude` (varchar) - Store coordinates (latitude)
+- `StoreLongitude` (date) - Store coordinates (longitude)
+
+**Source:** All columns source from `TDB08AX2012` → `General_Reference.dbo.BranchInfoGlobal_EDP`
+
+**Note:** The documentation indicates there are 58 total columns in this table, but only 8 are shown in the provided context. The table refreshes daily at 01:30:00 and contains PII.",0.0,,"SK_STORE_KEY, STORE_CODE, STORE_NAME",,,,,,0.1,6.01,6.11,3,"[{""table_name"": ""DIM_STORE"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Store\nData Sources: PDB08.StockDb\nTransformation Logic: ETL Script - DIM_STORE.docx\nLoad Type: FULL | Public | Information freely available""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Store\nColumns (58):\n  StoreCode | desc=\""Unique Store Code\"" | type=int | key_type=PRIMARY KEY | src_system=TDB08AX2012 | src_db""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""AX2012 | src_db=General_Reference | src_schema=dbo | src_table=BranchInfoGlobal_EDP | src_col=email\n  StorePhone | type=varchar | src_system=TDB08AX20""}]"
+Q04,simple_lookup,What is the refresh cadence for FACT_SALES_ORDER?,FACT_SALES_ORDER,,"I don't have that information in the loaded documents. The context provided only includes refresh information for:
+
+- **DIM_PRODUCT**: Daily refresh at 01:30:00
+- **DIM_STORE**: Daily refresh at 01:30:00
+- **FACT_WH_LOC_INVENTORY_INTRA**: No specific refresh time mentioned in the excerpt
+
+To answer your question about FACT_SALES_ORDER, I would need the summary document for that specific table.",0.67,"DAILY, REFRESH",INCREMENTAL,,,,,,0.08,2.84,2.92,3,"[{""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""summary"", ""text_preview"": ""for a selected audience that contains information of a commercial or otherwise confidential nature.\nRefresh Interval: Daily | Sensitive | Information ""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""summary"", ""text_preview"": ""l provisions under information privacy laws (The Privacy Act 1988)\nSpecified Refresh Time: 01:30:00\nRecord Count: 813 | Secret | Highly sensitive info""}, {""table_name"": ""FACT_WH_LOC_INVENTORY_INTRA"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Inventory_intra\nDescription: The SOH position of each Product in each Warehosue Management Location grain snapshotted c""}]"
+Q05,simple_lookup,What data type is the SK_PRODUCT_KEY column in DIM_PRODUCT?,DIM_PRODUCT,DIM_PRODUCT,"I don't have that information in the loaded documents. 
+
+The documents provided show information about the DIM_PRODUCT table, but they don't include a column named ""SK_PRODUCT_KEY"". 
+
+The primary key column shown in the documentation is **MYCHEM_ID** (type: int), which is described as the ""Product Key Code"" and comes from PDB08.StockDb.dbo.Products.MychemID.
+
+If SK_PRODUCT_KEY exists in the table, it's not documented in the context provided.",0.25,INT,"NUMBER, INTEGER, BIGINT",,,,,,0.1,3.47,3.57,3,"[{""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Product\nDescription: Contains the dimersion data and attributes for all products. Each row represents a unique product, enriched with brand""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Product\nColumns (24):\n  MYCHEM_ID | desc=\""Product Key Code\"" | type=int | key_type=PRIMARY KEY | src_system=PDB08 | src_db=Stoc""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""tockdb.stockdb.dbo.DimensionValues dv ON dv.DimensionValu\"" | Gold Layer Mapping=ProductCategoryCode\n  Generic | type=bit | src_system=PDB08 | src_db=S""}]"
+Q06,cross_entity,Which dimension tables are referenced by FACT_STORE_INVENTORY_INTRA?,FACT_STORE_INVENTORY_INTRA,,"I don't have that information in the loaded documents. The context provided only contains information about:
+
+- DimSupplier (dimension table)
+- Fact_Warehouse_Location_Replenishment (fact table)
+- Fact_Warehouse_Location_Packing (fact table)
+
+There is no documentation for FACT_STORE_INVENTORY_INTRA in the loaded documents, so I cannot identify which dimension tables it references.
+
+To answer your question, I would need the table summary or column mapping documentation for FACT_STORE_INVENTORY_INTRA.",0.0,,"DIM_STORE, DIM_PRODUCT, DIM_DATE",,,,,,0.11,18.49,18.6,3,"[{""table_name"": ""DIMSUPPLIER"", ""doc_type"": ""summary"", ""text_preview"": ""Table: DimSupplier\nDescription: The supplier dimension holds the companies that supply products to us. Can be manufacturers, distributors, wholesalers""}, {""table_name"": ""FACT_WH_LOC_REPLENISHMENT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Replenishment\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the""}, {""table_name"": ""FACT_WH_LOC_PACKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Packing\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the Archi""}]"
+Q07,cross_entity,What source columns from SAP map to DIM_STORE?,DIM_STORE,DIM_STORE,"Based on the provided context, **DIM_STORE does not have any columns sourced from SAP**. 
+
+All columns in DIM_STORE are sourced from:
+- **Source System**: TDB08AX2012
+- **Source Database**: General_Reference
+- **Source Schema**: dbo
+- **Source Table**: BranchInfoGlobal_EDP
+
+The mapped columns include:
+- **StoreCode** ← BranchInfoGlobal_EDP.BranchID
+- **BranchID** ← BranchInfoGlobal_EDP.BBranchID
+- **StoreName** ← BranchInfoGlobal_EDP.Storename
+- **StoreEmail** ← BranchInfoGlobal_EDP.email
+- **StorePropDescription** ← BranchInfoGlobal_EDP.StoreFrontName
+- **StandardMondayOpenHour** ← BranchInfoGlobal_EDP.MonOpen
+- **StandardMondayCloseHour** ← BranchInfoGlobal_EDP.MonClose
+- **StandardTuesdayOpenHour** ← BranchInfoGlobal_EDP.TueOpen
+
+The source system TDB08AX2012 appears to be a database server, not SAP. If you're looking for SAP-sourced columns, they would come from CDS Views according to your architecture, but none are present in the DIM_STORE documentation provided.",0.4,"SAP, CDS","MATNR, WERKS, MAPPING",,,,,,0.09,6.31,6.41,3,"[{""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Store\nColumns (58):\n  StoreCode | desc=\""Unique Store Code\"" | type=int | key_type=PRIMARY KEY | src_system=TDB08AX2012 | src_db""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Store\nData Sources: PDB08.StockDb\nTransformation Logic: ETL Script - DIM_STORE.docx\nLoad Type: FULL | Public | Information freely available""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""| src_db=General_Reference | src_schema=dbo | src_table=BranchInfoGlobal_EDP | src_col=LocationInfo\n  StorePropDescription | desc=\""store property or p""}]"
+Q08,cross_entity,Which fact tables use DIM_DATE as a dimension?,DIM_DATE,DIM_DATE,"I don't have that information in the loaded documents.
+
+The provided context only contains information about the DIM_DATE table itself (its summary and column mappings). To answer which fact tables use DIM_DATE as a dimension, I would need documentation for the fact tables that shows their foreign key relationships or join patterns to DIM_DATE.
+
+If you can provide fact table documentation or a data model/ERD document, I can identify those relationships.",0.0,,"FACT_STORE_INVENTORY, FACT_SALES",,,,,,0.1,3.53,3.63,3,"[{""table_name"": ""DIM_DATE"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Date\nDescription: Contains calendar and fiscal date attributes\nType: Dimension table\nData Sources: PBI05.TransactionStorage\nLoad Type: OneO""}, {""table_name"": ""DIM_DATE"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Date\nColumns (66):\n  PK_Date | desc=\""datetime\"" | src_system=PBI05 | src_db=TransactionsArchive | src_schema=dbo | src_table=Da""}, {""table_name"": ""DIM_DATE"", ""doc_type"": ""columns"", ""text_preview"": ""_system=PBI05 | src_db=TransactionsArchive | src_schema=dbo | src_table=Date | src_col=Fiscal_Month\n  Fiscal_Month_Name | desc=\""nvarchar\"" | src_system""}]"
+Q09,cross_entity,Compare the grain of FACT_SALES_ORDER and FACT_STORE_INVENTORY_INTRA,MULTIPLE,,"I don't have that information in the loaded documents.
+
+The provided context only contains information about:
+- FACT_WH_LOC_INVENTORY_INTRA (Warehouse Location Inventory)
+- FACT_WAREHOUSE_INVENTORY_INTRA
+- FACT_WAREHOUSE_INVENTORYHIST
+- FACT_STORE_PURCHASE_INVOICE
+
+Neither FACT_SALES_ORDER nor FACT_STORE_INVENTORY_INTRA are documented in the context you've provided. To answer this question, I would need table summary documents for both of those specific fact tables.",0.4,"ORDER, STORE","GRAIN, PRODUCT, LINE",,,,,,0.11,3.19,3.3,3,"[{""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""s Area: Store Inbound | Object Name: Fact_Store_Purchase_Invoice | Type: Fact | Statuses: Finalised\nObject Number: 7 | Business Area: Inventory Manage""}, {""table_name"": ""FACT_WH_LOC_INVENTORY_INTRA"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Inventory_intra\nDescription: The SOH position of each Product in each Warehosue Management Location grain snapshotted c""}, {""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""und | Object Name: Fact_Store_Purchase_Invoice | Type: Fact | Tab Exists: Yes | Statuses: Finalised\nObject Number: 7 | Business Area: Inventory Manage""}]"
+Q10,cross_entity,What is the full data lineage for FACT_SALES_ORDER from source to gold layer?,FACT_SALES_ORDER,,"I don't have that information in the loaded documents.
+
+The context provided only contains summary information for three warehouse location fact tables:
+- FACT_WH_LOC_REPLENISHMENT
+- FACT_WAREHOUSE_LOCATION_PICKING  
+- FACT_WH_LOC_PACKING
+
+None of these documents contain information about FACT_SALES_ORDER or its data lineage from source to gold layer. To answer your question, I would need documentation specifically for the FACT_SALES_ORDER table that includes its source systems, transformation logic, and layer-by-layer flow through the data warehouse architecture.",0.12,GOLD,"SAP, CDS, BRONZE, PLATINUM, ADF, DBT, SNOWFLAKE",,,,,,0.1,3.81,3.91,3,"[{""table_name"": ""FACT_WH_LOC_REPLENISHMENT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Replenishment\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the""}, {""table_name"": ""FACT_WAREHOUSE_LOCATION_PICKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Picking\nData Sources: These 2 tables need be unioned as some older transaction is moved to the Archive Table. Not Sure ""}, {""table_name"": ""FACT_WH_LOC_PACKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Packing\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the Archi""}]"
+Q11,edge_case,What is the grain of FACT_CUSTOMER_RETURNS?,NONE,,"I don't have that information in the loaded documents. The context provided includes information about DimSupplier, Fact_Warehouse_Location_Inventory_intra, and FactSalesRetailElectronicPayment, but does not contain any documentation for FACT_CUSTOMER_RETURNS.
+
+To answer your question about the grain of FACT_CUSTOMER_RETURNS, I would need access to that table's summary documentation.",1.0,I DON'T HAVE THAT INFORMATION,,0.5,MIXED_RESPONSE,,,,0.1,3.05,3.15,3,"[{""table_name"": ""DIMSUPPLIER"", ""doc_type"": ""summary"", ""text_preview"": ""Table: DimSupplier\nDescription: The supplier dimension holds the companies that supply products to us. Can be manufacturers, distributors, wholesalers""}, {""table_name"": ""FACT_WH_LOC_INVENTORY_INTRA"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Inventory_intra\nDescription: The SOH position of each Product in each Warehosue Management Location grain snapshotted c""}, {""table_name"": ""FACTSALESRETAILELECTRONICPAYM"", ""doc_type"": ""summary"", ""text_preview"": ""Table: FactSalesRetailElectronicPayment\nLoad Type: APPEND/MERGE/FULL/SCD | Public | Information freely available both internally and externally.\nData ""}]"
+Q12,edge_case,How many rows are in DIM_PRODUCT?,NONE,DIM_PRODUCT,"I don't have that information in the loaded documents.
+
+The documents provided contain the table structure, column definitions, and metadata for DIM_PRODUCT, but they don't include row count statistics or current data volumes.
+
+To get the row count, you would need to query Snowflake directly:
+```sql
+SELECT COUNT(*) FROM DIM_PRODUCT;
+```",1.0,I DON'T HAVE THAT INFORMATION,,1.0,CORRECT_DECLINE,,,,0.1,3.58,3.68,3,"[{""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Product\nDescription: Contains the dimersion data and attributes for all products. Each row represents a unique product, enriched with brand""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Product\nColumns (24):\n  MYCHEM_ID | desc=\""Product Key Code\"" | type=int | key_type=PRIMARY KEY | src_system=PDB08 | src_db=Stoc""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""tockdb.stockdb.dbo.DimensionValues dv ON dv.DimensionValu\"" | Gold Layer Mapping=ProductCategoryCode\n  Generic | type=bit | src_system=PDB08 | src_db=S""}]"
+Q13,edge_case,What is the SLA for FACT_SALES_ORDER refresh?,NONE,,"I don't have that information in the loaded documents.
+
+The provided context includes refresh information for:
+- DIM_WAREHOUSE(DC)_LOCATION (no specific time shown)
+- DIM_STORE (refresh time: 01:30:00)
+- FactSalesRetailElectronicPayment (no specific time shown)
+
+However, there is no information about FACT_SALES_ORDER or its refresh SLA in these documents.",1.0,I DON'T HAVE THAT INFORMATION,,1.0,CORRECT_DECLINE,,,,0.11,3.29,3.4,3,"[{""table_name"": ""FACTSALESRETAILELECTRONICPAYM"", ""doc_type"": ""summary"", ""text_preview"": ""Table: FactSalesRetailElectronicPayment\nLoad Type: APPEND/MERGE/FULL/SCD | Public | Information freely available both internally and externally.\nData ""}, {""table_name"": ""DIM_WAREHOUSE(DC)_LOCATION"", ""doc_type"": ""summary"", ""text_preview"": ""privacy laws (The Privacy Act 1988)\nSpecified Refresh Time: Unique Feilds: | [LOCATION] [warehouse]\nRecord Count: 204881 | Secret | Highly sensitive i""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""summary"", ""text_preview"": ""l provisions under information privacy laws (The Privacy Act 1988)\nSpecified Refresh Time: 01:30:00\nRecord Count: 813 | Secret | Highly sensitive info""}]"
+Q14,edge_case,Who owns the DIM_STORE table?,NONE,DIM_STORE,"I don't have that information in the loaded documents. The documentation provided includes the table summary, data sources, refresh schedule, and column mappings for DIM_STORE, but does not specify a table owner or responsible team/person.",1.0,I DON'T HAVE THAT INFORMATION,,1.0,CORRECT_DECLINE,,,,0.09,2.57,2.66,3,"[{""table_name"": ""DIM_STORE"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Store\nData Sources: PDB08.StockDb\nTransformation Logic: ETL Script - DIM_STORE.docx\nLoad Type: FULL | Public | Information freely available""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Store\nColumns (58):\n  StoreCode | desc=\""Unique Store Code\"" | type=int | key_type=PRIMARY KEY | src_system=TDB08AX2012 | src_db""}, {""table_name"": ""DIM_STORE"", ""doc_type"": ""columns"", ""text_preview"": ""AX2012 | src_db=General_Reference | src_schema=dbo | src_table=BranchInfoGlobal_EDP | src_col=email\n  StorePhone | type=varchar | src_system=TDB08AX20""}]"
+Q15,simple_lookup,List all bridge tables in the warehouse,BRIDGE,,"Based on the provided documents, here are the bridge tables in the warehouse:
+
+## Bridge Tables
+
+1. **BridgeProductBuyer** (Object #57)
+   - Business Area: Bridging Table / Core Dims
+   - Type: Dim
+   - Table Exists: Yes
+
+2. **BridgeProductManufacturer** (Object #58)
+   - Business Area: Bridging Table / Core Dims
+   - Type: Dim
+   - Table Exists: Yes
+
+3. **BridgeProductSupplier** (Object #59)
+   - Business Area: Bridging Table / Core Dims
+   - Type: Dim
+   - Table Exists: Yes
+
+4. **BridgeStorePartyRole** (Object #60)
+   - Business Area: Bridging Table / Core Dims
+   - Type: Dim
+   - Table Exists: Yes
+
+5. **Dim_BridgeOrgAreaManager** (Object #63)
+   - Business Area: Core Dim
+   - Type: Dim
+   - Table Exists: Yes
+
+---
+*Source: CONTROL_TABLE entries*
+
+**Note:** These bridge tables appear to handle many-to-many relationships between products and their buyers/manufacturers/suppliers, as well as store-to-party role relationships and organizational area manager assignments.",1.0,"BRIDGE, BRIDGE",,,,,,,0.1,5.48,5.59,3,"[{""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""57 | Business Area: Bridgeing Table | Object Name: BridgeProductBuyer | Type: Dim | Tab Exists: Yes\nObject Number: 58 | Business Area: Bridgeing Table""}, {""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""e: Dim\nObject Number: 53 | Business Area: Core Dims | Object Name: Dim_Warehouse(DC)_PO | Type: Dim\nObject Number: 54 | Business Area: Core Dims | Obj""}, {""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""bject Number: 52 | Business Area: Core Dim | Object Name: Dim_Location | Type: Dim | Tab Exists: No\nObject Number: 53 | Business Area: Core Dim | Obje""}]"
+Q16,cross_entity,What transformations happen between Bronze and Gold for DIM_PRODUCT?,DIM_PRODUCT,DIM_PRODUCT,"Based on the loaded documents, I don't have detailed information about the Bronze layer or the specific transformations between Bronze and Gold for DIM_PRODUCT.
+
+What I can tell you from the **DIM_PRODUCT** documentation:
+
+**Source System:** 
+- PDB08.StockDB (operational database)
+
+**Transformation Process:**
+- The transformation logic is documented in ""ETL Script - DIM_PRODUCT.docx"" (not loaded in current context)
+- Load Type: Full refresh
+
+**Gold Layer Output:**
+The Gold layer table includes enriched product data with mappings such as:
+- ProductCode (from MychemID)
+- BuyerName (from Buyers table)
+- ProductGroupCode (from LockieMainGroups table)
+- ProductCategoryCode (from DimensionValues)
+- IsGeneric (from ProductsDrugInformation)
+
+The transformations involve **joins across multiple source tables** in StockDB (Products, Buyers, LockieMainGroups, ProductsDrugInformation, Dimensions, etc.) to create a denormalized dimension table.
+
+To get the complete transformation details between Bronze and Gold layers, you would need to reference the ""ETL Script - DIM_PRODUCT.docx"" document or the actual dbt models that aren't included in the current context.",0.8,"BRONZE, GOLD, DBT, TRANSFORM",PLATINUM,,,,,,0.1,7.32,7.42,3,"[{""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Dim_Product\nDescription: Contains the dimersion data and attributes for all products. Each row represents a unique product, enriched with brand""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""tockdb.stockdb.dbo.DimensionValues dv ON dv.DimensionValu\"" | Gold Layer Mapping=ProductCategoryCode\n  Generic | type=bit | src_system=PDB08 | src_db=S""}, {""table_name"": ""DIM_PRODUCT"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: Dim_Product\nColumns (24):\n  MYCHEM_ID | desc=\""Product Key Code\"" | type=int | key_type=PRIMARY KEY | src_system=PDB08 | src_db=Stoc""}]"
+Q17,simple_lookup,What is the primary key of FACT_STORE_INVENTORY_INTRA?,FACT_STORE_INVENTORY_INTRA,,"I don't have that information in the loaded documents. 
+
+The context mentions a table called ""Fact_Store_Purchase_Invoice"" in the CONTROL_TABLE document and provides summary information for ""Fact_Warehouse_Location_Inventory_intra"" and ""Fact_Warehouse_Location_Replenishment"", but there is no information about a table named ""FACT_STORE_INVENTORY_INTRA"" or its primary key.
+
+To answer your question, I would need documentation that specifically covers the FACT_STORE_INVENTORY_INTRA table structure, including its grain definition and key columns.",0.67,"KEY, PRIMARY",SK_,,,,,,0.12,3.82,3.93,3,"[{""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""s Area: Store Inbound | Object Name: Fact_Store_Purchase_Invoice | Type: Fact | Statuses: Finalised\nObject Number: 7 | Business Area: Inventory Manage""}, {""table_name"": ""FACT_WH_LOC_INVENTORY_INTRA"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Inventory_intra\nDescription: The SOH position of each Product in each Warehosue Management Location grain snapshotted c""}, {""table_name"": ""FACT_WH_LOC_REPLENISHMENT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Replenishment\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the""}]"
+Q18,cross_entity,Which tables have columns sourced from MyPOS?,MULTIPLE,,"Based on the provided context documents, I can identify **one table** with columns sourced from MyPOS (referred to as ""MRM"" in the source system):
+
+## FactSalesRetailElectronicPayment
+
+This table has columns sourced from the MyPOS system (MRM/PDB14/Sql3):
+
+**Columns from MyPOS:**
+- **ElectronicPaymentID** (PK) - from `Transactions_ElectronicPayments.ElectronicPaymentID`
+- **InvoiceID** (PK) - from `Transactions_ElectronicPayments.InvoiceID`
+- **ElectronicType** (Varchar) - from `Transactions_ElectronicPayments.ElectronicType`
+- **ElectronicRef** (Varchar) - from `Transactions_ElectronicPayments.ElectronicRef`
+
+**Source Details:**
+- Source System: MRM (MyPOS)
+- Source Database: PDB14/Sql3
+- Source Schema: dbo
+- Source Table: Transactions_ElectronicPayments
+
+---
+
+**Note:** The other two tables in the context (Fact_Warehouse_Location_Packing and Fact_Warehouse_Location_Picking) source from PDB15, not MyPOS. Additional tables with MyPOS sources may exist but are not included in the provided documentation context.",1.0,"MYPOS, SOURCE, POS",,,,,,,0.09,6.12,6.2,3,"[{""table_name"": ""FACTSALESRETAILELECTRONICPAYM"", ""doc_type"": ""columns"", ""text_preview"": ""Column Mapping for: FactSalesRetailElectronicPayment\nColumns (20):\n  Field Name | type=Type | key_type=Key\n  ElectronicPaymentID | type=PK | key_type=""}, {""table_name"": ""FACT_WH_LOC_PACKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Packing\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the Archi""}, {""table_name"": ""FACT_WAREHOUSE_LOCATION_PICKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Picking\nData Sources: These 2 tables need be unioned as some older transaction is moved to the Archive Table. Not Sure ""}]"
+Q19,edge_case,Can you show me the ERD for the sales domain?,NONE,,"I don't have that information in the loaded documents.
+
+The documents I have access to contain table summaries and column mappings for individual tables (DimSupplier, DIM_WH_Location) and a control table listing, but they do not include Entity Relationship Diagrams (ERDs) or comprehensive domain models for the sales domain.
+
+To answer your question, I would need documentation that includes:
+- ERD diagrams or relationship definitions
+- Foreign key mappings between tables
+- A complete list of sales domain tables and their relationships",1.0,I DON'T HAVE THAT INFORMATION,,1.0,CORRECT_DECLINE,,,,0.1,4.51,4.61,3,"[{""table_name"": ""DIMSUPPLIER"", ""doc_type"": ""summary"", ""text_preview"": ""Table: DimSupplier\nDescription: The supplier dimension holds the companies that supply products to us. Can be manufacturers, distributors, wholesalers""}, {""table_name"": ""DIM_WAREHOUSE(DC)_LOCATION"", ""doc_type"": ""summary"", ""text_preview"": ""Table: DIM_WH_Location\nData Sources: PDB15 and PDB08 to get the mapping DC branchID\nLoad Type: Public | Information freely available both internally a""}, {""table_name"": ""CONTROL_TABLE"", ""doc_type"": ""unknown"", ""text_preview"": ""s Area: Store Inbound | Object Name: Fact_Store_Purchase_Invoice | Type: Fact | Statuses: Finalised\nObject Number: 7 | Business Area: Inventory Manage""}]"
+Q20,edge_case,What is the difference between FACT_SALES_ORDER and FACT_SALES_ORDER_V2?,NONE,,"I don't have that information in the loaded documents. The context provided only contains information about warehouse location-related fact tables (FACT_WH_LOC_REPLENISHMENT, FACT_WAREHOUSE_LOCATION_PICKING, and FACT_WH_LOC_PACKING), but does not include any documentation about FACT_SALES_ORDER or FACT_SALES_ORDER_V2 tables.
+
+To answer your question, I would need documentation that specifically covers those sales order fact tables.",1.0,I DON'T HAVE THAT INFORMATION,,1.0,CORRECT_DECLINE,,,,0.1,3.06,3.17,3,"[{""table_name"": ""FACT_WH_LOC_REPLENISHMENT"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Replenishment\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the""}, {""table_name"": ""FACT_WAREHOUSE_LOCATION_PICKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Picking\nData Sources: These 2 tables need be unioned as some older transaction is moved to the Archive Table. Not Sure ""}, {""table_name"": ""FACT_WH_LOC_PACKING"", ""doc_type"": ""summary"", ""text_preview"": ""Table: Fact_Warehouse_Location_Packing\nType: Fact\nData Sources: PDB15 | These 2 tables need be unioned as some older transaction is moved to the Archi""}]"
