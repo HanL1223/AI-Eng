@@ -15,10 +15,26 @@ import json
 import time
 import argparse
 
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
+from rag import (
+    load_documents,      # Loads .txt, .md, .xlsx from docs/ folder
+    chunk_text,          # Splits documents into overlapping chunks
+    build_vector_store,  # Stores chunks in ChromaDB with embeddings
+    retrieve,            # Queries ChromaDB for relevant chunks
+    ask_claude,          # Sends query + context to Claude API
+    extract_table_name,  # Detects table names mentioned in questions
+    DOCS_DIR,            # "docs" — where your STTM files live
+    TOP_K,               # 3 — how many chunks to retrieve (default)
+)
 
 #Loading Eval question
 
-def laod_eval_question(filepath:str,category_filter:str = None) -> list[dict]:
+def load_eval_question(filepath:str,category_filter:str = None) -> list[dict]:
     """
     Load test questions from a CSV file into a list of dictionaries.
     Optionally filter to only one category (e.g., "simple_lookup").
@@ -149,8 +165,124 @@ def score_with_llm_judge(
         expected_keywords:list[str],
         category:str,
 ) -> dict:
-    
+    """
+    Use a separate Claude API call to grade the answer on a 1-5 scale.
+    question: The original eval question ("What is the grain of...")
+    answer: The model's full text response to evaluate
+    expected_keywords: What the answer should contain (gives the judge context)
+    category: "simple_lookup" | "cross_entity" | "edge_case"
+              (the judge uses different grading criteria per category)
 
+    RETURNS
+    On success:
+    {
+        "score": 0.75,        # Normalized to 0.0-1.0 (consistent with keyword scorer)
+        "raw_score": 4,       # Original 1-5 scale (easier for humans to read)
+        "explanation": "Correct grain identified, missing refresh detail"
+    }
+
+    On error (API failure, parsing failure, etc.):
+    {
+        "score": None,
+        "raw_score": None,
+        "explanation": "Judge error: <error message>"
+    }
+    """
+    #Guard to check if SDK is available
+    if not HAS_ANTHROPIC:
+        return {"score":None,"raw_score":None,
+                "explanation":"anthropic not available"}
+    
+    client = anthropic.Anthropic()
+    judge_prompt = f"""You are evaluating a RAG chatbot's answer about data warehouse documentation.
+
+QUESTION:{question}
+CATEGORY:{category}
+EXPECTED KEYWORDS/CONCEPTS: {', '.join(expected_keywords)}
+ANSWER TO EVALUATE:{answer}
+
+SCORING CRITERIA BY CATEGORY:
+
+For "simple_lookup": 
+  Does the answer correctly state the requested fact from the STTM documents?
+  5 = correct, well-sourced, includes relevant detail
+  3 = partially correct, missing some key info
+  1 = wrong, hallucinated, or pulled from wrong table
+
+For "cross_entity": 
+  Does the answer correctly synthesize information across multiple tables or sources?
+  5 = comprehensive, accurately connects multiple tables, cites sources
+  3 = gets some relationships right but misses others
+  1 = fails to connect tables, or makes up relationships
+
+For "edge_case": 
+  Does the answer correctly say "I don't know" or "not in the documents"?
+  5 = clearly and confidently declines to answer, explains info is not available
+  3 = hedges but partially declines
+  1 = confidently provides made-up information (hallucination)
+
+You MUST provide your response in EXACTLY this format:
+SCORE: [1-5]
+EXPLANATION: [one sentence explaining your score]
+
+"""
+
+    #Calling API
+    # max_tokens=200 is intentionally low:
+    #   - We only need "SCORE: 4\nEXPLANATION: one sentence"
+    #   - Low token limit saves money and prevents rambling
+    #   - If the judge tried to write a long analysis, it would
+    #     get cut off — but our parsing only needs the first few lines
+    #
+    # We wrap everything in try/except because API calls can fail:
+    #   - Network timeout
+    #   - Rate limiting (429 error — too many requests)
+    #   - Server error (500 error)
+    #   - Invalid API key
+    # On failure, we return None scores rather than crashing the whole eval.
+
+    try:
+        response = client.message.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens =200,
+            messages = [{"role":'user',"content":judge_prompt}]
+        )
+        judge_text = response.content[0].text.strip()
+
+        score = None
+        explanation = ""
+
+        for line in judge_text.split("\n"):
+            line = line.strip()
+            if line.startwith("SCORE:"):
+                try:
+                    score = int(line.replace("SCORE:","").strip())
+                    score = max(1, min(5, score))
+                except ValueError:
+                    score = None
+            elif line.startwith("EXPLANATION:"):
+                explanation = line.replace("EXPLANATION:","").strip()
+            normalized = (score - 1) / 4.0 if score else None
+            return {
+            "score": round(normalized, 2) if normalized is not None else None,
+            "raw_score": score,
+            "explanation": explanation,
+        }
+    except Exception as e:
+        return {"score": None, "raw_score": None, "explanation": f"Judge error: {e}"}
+
+
+#Main Eval Runner
+
+
+def run_evaluation(
+        questions:list[dict],
+        collection,
+        known_tables:list[str],
+        use_llm_judge: bool = False,
+        top_k: int = TOP_K,
+) -> list[str]:
+    
 
 
 
