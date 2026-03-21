@@ -710,7 +710,7 @@ def main():
             print()
 
         try:
-            answer = improved_ask_claude(query,chunks)
+            answer = ask_claude(query,chunks)
             print(f"\nClaude: {answer}\n")
         except anthropic.AuthenticationError:
             print("\n Invalid API key.")
