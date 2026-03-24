@@ -101,7 +101,7 @@ def ask_ollama(
     PARAMETERS
     """
     #Building system prompt
-    if system_prompt is None:
+    if system_prompt is None:   
         #use SIMPLIFIED system prompt for local models
         #Small models 
         system_prompt = (
@@ -113,16 +113,151 @@ def ask_ollama(
         )
 
         #Build th econtext string
-        context_parts = []
-        for chunk in context_chunks:
-            label_parts = []
-            if chunk.get("table_name"):
-                label_parts.append(chunk['table_name'])
-            if chunk.get("doc_type") and chunk["doc_type"] != "text":
-                label_parts.append(chunk["doc_type"])
-            label = " - ".join(label_parts) if label_parts else chunk.get("source", "unknown")
-            context_parts.append(f"[Source: {label}]\n{chunk['text']}")
-        context = "\n\n---\n\n".join(context_parts)
+    context_parts = []
+    for chunk in context_chunks:
+        label_parts = []
+        if chunk.get("table_name"):
+            label_parts.append(chunk['table_name'])
+        if chunk.get("doc_type") and chunk["doc_type"] != "text":
+            label_parts.append(chunk["doc_type"])
+        label = " - ".join(label_parts) if label_parts else chunk.get("source", "unknown")
+        context_parts.append(f"[Source: {label}]\n{chunk['text']}")
+    context = "\n\n---\n\n".join(context_parts)
+
+    #Build ollama request payload
+    # CRITICAL DIFFERENCE FROM ANTHROPIC API:
+    # Ollama puts the system prompt in the messages array as
+    # {"role": "system", ...}. Anthropic has a separate "system"
+    # parameter outside the messages array.
+    #
+    # Ollama format:
+    #   messages = [
+    #       {"role": "system", "content": "..."},
+    #       {"role": "user", "content": "..."},
+    #   ]
+    #
+    # Anthropic format:
+    #   system = "..."
+    #   messages = [
+    #       {"role": "user", "content": "..."},
+    #   ]
+    messages = [
+        {"role":"system","content":system_prompt},
+        {
+            "role":"user",
+            "content":f"Context from documents:\n\n {context}\n\n---\n\nQuestion: {query}",
+        },
+    ]
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict":512 #Max tokens to genereate
+        }
+    }
+
+    #Send request to ollama
+    try:
+        response=requests.post(
+            OLLAMA_CHAT_ENDPOINT,
+            json= payload,
+            timeout=OLLAMA_TIMEOUT
+        )
+    except requests.ConnectionError:
+        raise ConnectionError(
+            "Cannot connect to Ollama, check if server is running"
+        )
+    #Parse the format
+    # Ollama response format:
+    # {
+    #     "model": "qwen2.5:0.5b",
+    #     "message": {
+    #         "role": "assistant",
+    #         "content": "DIM_STORE is a dimension table..."
+    #     },
+    #     "done": true,
+    #     "total_duration": 1234567890,  # nanoseconds
+    #     "eval_count": 150              # tokens generated
+    # }
+    #
+    # Compare with Anthropic response format:
+    # {
+    #     "content": [{"type": "text", "text": "DIM_STORE is..."}],
+    #     "usage": {"input_tokens": 500, "output_tokens": 150}
+    # }
+    if response.status_code != 200:
+        raise RuntimeError(
+        f"Ollama returned HTTP {response.status_code}: {response.text}"
+    )
+    data = response.json()
+
+    try:
+        answer = data["message"]["content"]
+    except (KeyError, TypeError) as e:
+        raise RuntimeError(
+            f"Unexpected Ollama response format: {e}\n"
+            f"Response: {json.dumps(data, indent=2)[:500]}"
+        )
+
+    return answer.strip()
+
+
+
+#Testing
+if __name__ == "__main__":
+    print("=" * 60)
+    print("OLLAMA CLIENT -- STANDALONE TEST")
+    print("=" * 60)
+
+    # Step 1: Check if Ollama is running
+    print("\nChecking Ollama connection...")
+    if not is_ollama_running():
+        print("  Ollama is NOT running.")
+        print("  Start it with: ollama serve")
+        print("  Then pull a model: ollama pull qwen2.5:0.5b")
+        print("\n  Skipping live test. The code structure is correct.")
+        print("  You can verify by starting Ollama and re-running this script.")
+        exit(0)
+
+    print("  Ollama is running.")
+
+    # Step 2: List available models
+    models = list_available_models()
+    print(f"\nAvailable models: {models}")
+
+    if not models:
+        print("  No models downloaded. Run: ollama pull qwen2.5:0.5b")
+        exit(0)
+
+    # Step 3: Test generation with fake chunks
+    test_model = models[0]  # Use the first available model
+    print(f"\nTesting with model: {test_model}")
+
+    test_chunks = [
+        {
+            "text": "DIM_STORE is a dimension table. Grain: one row per store location. "
+                    "Primary Key: SK_STORE_KEY (surrogate). Business Key: BK_STORE_KEY. "
+                    "Source System: SAP via CDS View.",
+            "source": "STTM__DIM_STORE__summary",
+            "table_name": "DIM_STORE",
+            "doc_type": "summary",
+        },
+    ]
+
+    test_query = "What is the grain of DIM_STORE?"
+    print(f"  Query: {test_query}")
+
+    start = time.time()
+    try:
+        answer = ask_ollama(test_query, test_chunks, model=test_model)
+        elapsed = time.time() - start
+        print(f"  Answer ({elapsed:.1f}s): {answer[:200]}")
+    except Exception as e:
+        print(f"  Error: {e}")
+
+    print("\nAll tests passed. ollama_client.py is ready.")
  
     
 

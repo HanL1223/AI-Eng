@@ -1,512 +1,540 @@
 """
-ollama_client.py -- Local Model Inference via Ollama
-====================================================
-Week 4, Step 3 of 6
+query_router.py -- Intelligent Query Routing for RAG
+=====================================================
+Week 4, Step 5 of 6
 
 WHAT THIS FILE DOES
 -------------------
-Provides a function to call locally-running LLMs through Ollama.
-This gives you a free, private alternative to the Claude API.
+Orchestrates the FULL query pipeline: given a user question, this module
+decides HOW to answer it by making three routing decisions:
 
-WHAT IS OLLAMA?
----------------
-Ollama is a tool that runs open-source LLMs on your local machine.
-It handles model downloading, GPU memory management, and serves
-the model through a simple HTTP API.
+  Decision 1: RETRIEVAL STRATEGY
+    -> Use memory context? (follow-up vs new topic)
+    -> How many chunks to retrieve? (simple vs complex query)
 
-Think of it as "Docker for language models":
-  - Docker:  docker pull nginx   -> docker run nginx  -> http://localhost:80
-  - Ollama:  ollama pull qwen2.5 -> ollama serve      -> http://localhost:11434
+  Decision 2: RERANKING
+    -> Should we rerank? (complex queries benefit, simple ones do not)
+    -> Which method? (LLM reranker for quality, keyword for speed)
 
-The key insight: Ollama runs a LOCAL HTTP server. Your Python code
-talks to it the same way it talks to the Claude API -- by sending
-HTTP requests. The only difference is the URL (localhost vs api.anthropic.com)
-and the request/response format.
+  Decision 3: MODEL SELECTION
+    -> Claude for complex/cross-entity questions
+    -> Ollama for simple single-table lookups (if available)
+    -> Fallback to Claude if Ollama is not running
 
-INSTALLATION (DO THIS FIRST)
------------------------------
-Option A: Mac (Apple Silicon -- your Mac Mini)
-  1. Download from https://ollama.ai
-  2. Install the .dmg file
-  3. Open Terminal and run: ollama pull qwen2.5:0.5b
-  4. Ollama auto-starts as a background service
+This is the BRAIN of your chatbot. Everything else (rag.py, reranker.py,
+model_switcher.py) provides capabilities. The query_router DECIDES which
+capabilities to use for each question.
 
-Option B: Windows
-  1. Download from https://ollama.ai
-  2. Run the installer
-  3. Open PowerShell and run: ollama pull qwen2.5:0.5b
-  4. Ollama runs as a Windows service
+WHY QUERY ROUTING MATTERS
+--------------------------
+Without routing, every query gets the same treatment:
+  "What is DIM_STORE?" -> retrieve 3 chunks -> ask Claude -> $0.01
+  "Compare all facts"  -> retrieve 3 chunks -> ask Claude -> $0.01
 
-Option C: Linux
-  curl -fsSL https://ollama.com/install.sh | sh
-  ollama pull qwen2.5:0.5b
+With routing:
+  "What is DIM_STORE?" -> retrieve 3 chunks -> ask Ollama -> $0.00 (free!)
+  "Compare all facts"  -> retrieve 10 chunks -> rerank to 3 -> ask Claude -> $0.02
 
-VERIFY INSTALLATION:
-  ollama list              # Shows downloaded models
-  ollama run qwen2.5:0.5b  # Interactive chat (type /bye to exit)
-  curl http://localhost:11434/api/tags  # Should return JSON with models
+The simple query is FREE and FASTER (no network round-trip).
+The complex query gets MORE context and BETTER scoring.
 
-RECOMMENDED MODELS FOR YOUR STTM PROJECT
------------------------------------------
-| Model | Size | RAM | Quality | Speed | Best For |
-|-------|------|-----|---------|-------|----------|
-| qwen2.5:0.5b | 400MB | 1GB | Low | Fast | Testing, simple lookups |
-| qwen2.5:3b | 2GB | 4GB | Medium | Medium | Single-table questions |
-| llama3.2:3b | 2GB | 4GB | Medium | Medium | General questions |
-| qwen2.5:7b | 4.5GB | 8GB | Good | Slower | Cross-entity questions |
-| llama3.1:8b | 4.7GB | 8GB | Good | Slower | Complex reasoning |
+COST IMPACT (estimated for 100 queries/day):
+  Without routing:  100 * $0.01 = $1.00/day
+  With routing:     70 simple * $0.00 + 30 complex * $0.02 = $0.60/day
+  Savings: 40%
 
-Start with qwen2.5:0.5b for learning. It will fail on complex questions,
-but that is the POINT -- you will see exactly where local models break
-compared to Claude, which informs your query routing decisions in Step 5.
-
-dbt ANALOGY:
-  Claude API   = Snowflake (powerful, pay-per-query, cloud)
-  Ollama       = DuckDB (free, local, limited but fast for simple things)
-
-WHY SMALL MODELS FAIL IN PREDICTABLE WAYS
-------------------------------------------
-From your Week 2 experiments, you learned that smaller models fail
-differently across question types:
-
-  Simple lookups:     "What is the grain of DIM_STORE?"
-    -> Small model: Often correct (the answer is in the context verbatim)
-
-  Cross-entity:       "Which dimensions does FACT_SALES reference?"
-    -> Small model: Often fails (requires reasoning across multiple chunks)
-
-  Edge cases:         "What is the SLA for FACT_SALES refresh?"
-    -> Small model: Often WRONG (hallucinates instead of saying "I don't know")
-
-These failure modes are exactly why we route queries: simple lookups
-go to Ollama (free/fast), complex queries go to Claude (accurate).
+dbt ANALOGY: This is like having a dispatcher model that routes data
+to different downstream models based on the data type. Think of it as:
+  -- Staging: classify the incoming query
+  -- Branch 1: Simple path (Ollama, no reranking)
+  -- Branch 2: Complex path (Claude, with reranking and memory)
+  -- Mart: Final answer delivered to the user
 
 
-OLLAMA API FORMAT
+THE ROUTING TABLE
 -----------------
-Ollama's API is different from Anthropic's. Here is the comparison:
+Here is the full decision matrix:
 
-  Anthropic (what you know):
-    POST https://api.anthropic.com/v1/messages
-    {"model": "claude-sonnet-4-5-20250929", "messages": [...], "system": "..."}
+| Query Type     | Memory? | Retrieve | Rerank? | Model    | Reason                           |
+|---------------|---------|----------|---------|----------|----------------------------------|
+| simple_lookup  | No*     | 3 chunks | No      | Ollama** | Fast, cheap, answer is verbatim  |
+| follow_up      | Yes     | 3 chunks | No      | Claude   | Needs context to resolve "it"    |
+| cross_entity   | No*     | 10 chunks| Yes->3  | Claude   | Needs wide retrieval + precision |
+| edge_case      | No      | 3 chunks | No      | Claude   | Needs reasoning to say "I don't know" |
 
-  Ollama (what this file uses):
-    POST http://localhost:11434/api/chat
-    {"model": "qwen2.5:0.5b", "messages": [...], "stream": false}
+* Memory is added if is_follow_up() returns True, regardless of query type.
+** Falls back to Claude if Ollama is not running.
 
-Key differences:
-  1. URL: localhost instead of api.anthropic.com
-  2. No API key needed (it is your own machine)
-  3. "stream": false (we want the full response, not streaming chunks)
-  4. System prompt goes in messages as {"role": "system", ...}
-     instead of a separate "system" parameter
-  5. Response format: {"message": {"content": "..."}} instead of
-     {"content": [{"text": "..."}]}
-
-
-DEPENDENCIES
-------------
-  - requests (for HTTP calls to Ollama -- likely already installed)
-  - Ollama must be running locally (see installation above)
-
-GOTCHA: OLLAMA MUST BE RUNNING
--------------------------------
-If Ollama is not running, requests.post() will raise:
-  ConnectionError: ('Connection aborted.', ConnectionRefusedError(...))
-
-The fix: start Ollama before running your chatbot.
-  Mac:     ollama serve  (or it auto-starts after install)
-  Windows: Start the Ollama service, or run ollama serve in PowerShell
-  Linux:   systemctl start ollama
+This table is a STARTING POINT. Your eval framework will tell you
+if adjustments are needed. For example, if Ollama hallucinates too
+much on simple lookups, you might route everything to Claude.
 
 
 HOW THIS FILE CONNECTS TO YOUR PROJECT
 ---------------------------------------
-  model_switcher.py imports ask_ollama() from this file
-    --> calls it when the selected model starts with "ollama/"
-    --> the response format matches ask_claude() (returns a string)
+  app.py is the ONLY file that imports from query_router.py.
+  The call chain is:
+
+    app.py
+      --> query_router.route_query(query, collection, known_tables, memory)
+          --> rag.retrieve() to get chunks
+          --> reranker.rerank_chunks() if needed
+          --> model_switcher.generate() with the chosen model
+      <-- returns {answer, routing_decision, timing, debug_info}
+
+  This replaces the current 3-step sequence in app.py:
+    detected = extract_table_name(query, known_tables)
+    chunks = retrieve(collection, query, ...)
+    answer = ask_claude(query, chunks)
+
+
+DEPENDENCIES
+------------
+  - rag.py (retrieve, extract_table_name, classify_query)
+  - reranker.py (rerank_chunks)
+  - model_switcher.py (generate)
+  - conversation_memory.py (ConversationMemory)
 """
 
-import requests
-import json
 import time
 
 
 # =====================================================================
-# CONFIGURATION
+# SECTION 1: ROUTING CONFIGURATION
 # =====================================================================
 #
-# The Ollama server URL. By default, Ollama listens on port 11434.
-# If you change this in Ollama's config, update it here.
+# These settings control the routing decisions. You can tune them
+# based on your eval results.
 #
-# PYTHON REFRESHER: Module-level constants
-# -----------------------------------------
-# Constants at the top of a file are available to all functions below.
-# Convention: UPPER_SNAKE_CASE for constants, lower_snake_case for variables.
-# Python does not enforce "const" -- you CAN reassign these. The naming
-# convention signals "this should not change at runtime."
+# DESIGN DECISION: Configuration as module-level constants
+# --------------------------------------------------------
+# In production, these would live in a config file or environment
+# variables. For learning, module-level constants are simpler and
+# let you see all settings in one place.
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_CHAT_ENDPOINT = f"{OLLAMA_BASE_URL}/api/chat"
-OLLAMA_TAGS_ENDPOINT = f"{OLLAMA_BASE_URL}/api/tags"
+# How many chunks to retrieve for different query types
+SIMPLE_TOP_K = 3        # Single-table lookups need few, precise chunks
+COMPLEX_TOP_K = 10      # Cross-entity needs wide retrieval for reranking
+DEFAULT_TOP_K = 3       # Fallback for unknown query types
 
-# Default timeout in seconds. Ollama can be slow on first request
-# (loading model into GPU memory). Subsequent requests are faster.
-OLLAMA_TIMEOUT = 120
+# After reranking, how many chunks to keep
+RERANK_TOP_N = 3        # Return 3 best chunks after reranking 10
 
+# Reranking method: "hybrid" (BM25+cross-encoder+RRF, production recommended),
+# "cross_encoder" (transformer only), "bm25" (keyword only, free), "none"
+RERANK_METHOD = "hybrid"
 
-# =====================================================================
-# SECTION 1: HEALTH CHECK
-# =====================================================================
-
-def is_ollama_running() -> bool:
-    """
-    Check if the Ollama server is running and reachable.
-
-    This is called by model_switcher.py before attempting to use Ollama.
-    If Ollama is not running, model_switcher falls back to Claude.
-
-    HOW IT WORKS
-    ------------
-    We make a GET request to the /api/tags endpoint, which returns a
-    list of downloaded models. If the request succeeds, Ollama is running.
-    If it fails (ConnectionError), Ollama is not running.
-
-    PYTHON REFRESHER: try/except for expected errors
-    --------------------------------------------------
-    requests.get() can raise several exceptions:
-      - ConnectionError: Server is not running
-      - Timeout: Server took too long to respond
-      - requests.RequestException: Any other request error
-
-    We catch all of these as a single "Ollama is not available" case.
-    In production, you might handle each differently (retry on timeout,
-    alert on connection error).
-
-    RETURNS
-    -------
-    bool
-        True if Ollama is running and reachable, False otherwise.
-    """
-    try:
-        response = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=5)
-        return response.status_code == 200
-    except requests.RequestException:
-        return False
-
-
-def list_available_models() -> list[str]:
-    """
-    Get the list of models downloaded in Ollama.
-
-    This is used by the Streamlit UI to populate the model dropdown.
-    Only models that are actually downloaded can be used.
-
-    RETURNS
-    -------
-    list[str]
-        Model names like ["qwen2.5:0.5b", "llama3.2:3b"].
-        Returns empty list if Ollama is not running.
-    """
-    try:
-        response = requests.get(OLLAMA_TAGS_ENDPOINT, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            # ---------------------------------------------------------------
-            # The /api/tags response looks like:
-            # {"models": [{"name": "qwen2.5:0.5b", "size": 400000000, ...}]}
-            #
-            # PYTHON REFRESHER: List comprehension from nested dict
-            # ---------------------------------------------------------------
-            # [m["name"] for m in data.get("models", [])]
-            #
-            # data.get("models", []) returns the "models" list, or an empty
-            # list if "models" key is missing. This prevents KeyError.
-            #
-            # Long-form equivalent:
-            #   names = []
-            #   models = data.get("models", [])
-            #   for m in models:
-            #       names.append(m["name"])
-            #   return names
-            # ---------------------------------------------------------------
-            return [m["name"] for m in data.get("models", [])]
-        return []
-    except requests.RequestException:
-        return []
+# Model preferences
+SIMPLE_MODEL = "ollama/qwen2.5:0.5b"   # Free/fast for simple queries
+COMPLEX_MODEL = "claude"                 # Accurate for complex queries
+FALLBACK_MODEL = "claude"                # If preferred model is unavailable
 
 
 # =====================================================================
-# SECTION 2: THE MAIN GENERATION FUNCTION
+# SECTION 2: THE ROUTING FUNCTION
 # =====================================================================
 
-def ask_ollama(
+def route_query(
     query: str,
-    context_chunks: list[dict],
-    model: str = "qwen2.5:0.5b",
-    system_prompt: str = None,
-    temperature: float = 0.1,
-) -> str:
+    collection,
+    known_tables: list[str],
+    memory=None,
+    force_model: str = None,
+    force_rerank: str = None,
+) -> dict:
     """
-    Generate an answer using a local Ollama model.
+    Route a query through the optimal pipeline and return the answer.
 
-    This function has the SAME signature as ask_claude() in rag.py
-    (query + context_chunks -> string answer). This is intentional --
-    model_switcher.py can call either function interchangeably.
+    This is the MAIN ENTRY POINT for the query pipeline. app.py calls
+    this instead of manually chaining retrieve() -> ask_claude().
 
     PARAMETERS
     ----------
     query : str
         The user's question.
-    context_chunks : list[dict]
-        Retrieved chunks from ChromaDB (same format as ask_claude).
-    model : str
-        The Ollama model to use. Must be downloaded:
-          ollama pull qwen2.5:0.5b
-        Default is qwen2.5:0.5b (smallest, fastest, for learning).
-    system_prompt : str, optional
-        Override the system prompt. If None, uses a simplified version
-        of your IMPROVED_SYSTEM_PROMPT from rag.py.
-    temperature : float
-        Controls randomness. 0.0 = deterministic, 1.0 = creative.
-        We default to 0.1 (nearly deterministic) because we want
-        factual answers about data warehouse tables, not creativity.
-
-        DESIGN RATIONALE: Low temperature for RAG
-        ------------------------------------------
-        RAG answers should be grounded in the retrieved context.
-        High temperature encourages the model to be "creative",
-        which in a factual domain means "hallucinate".
-        0.1 gives a tiny bit of variability to avoid exact repetition
-        while staying close to the source material.
+    collection : chromadb.Collection
+        Your ChromaDB vector store.
+    known_tables : list[str]
+        All known table names (for extract_table_name).
+    memory : ConversationMemory, optional
+        If provided, enables follow-up question handling.
+    force_model : str, optional
+        Override the model selection. If set, the router uses this
+        model regardless of query complexity. Useful for:
+          - The model dropdown in the Streamlit sidebar
+          - A/B testing with eval.py (--model claude vs --model ollama)
+    force_rerank : str, optional
+        Override the reranking method. Values: "llm", "keyword", "none".
+        If None, the router decides based on query complexity.
 
     RETURNS
     -------
-    str
-        The model's response text.
+    dict with keys:
+        "answer": str           -- The generated answer
+        "chunks": list[dict]    -- The chunks used (after reranking if applied)
+        "routing": dict         -- The routing decisions made
+        "timing": dict          -- Timing breakdown for each step
+        "debug": dict           -- Additional debug information
 
-    RAISES
-    ------
-    ConnectionError
-        If Ollama is not running.
-    RuntimeError
-        If the model returns an unexpected response format.
+    PYTHON REFRESHER: Returning a dict vs a tuple
+    -----------------------------------------------
+    In earlier code (eval.py), we return tuples:
+        return score, matched, missed
 
-    GOTCHA: FIRST REQUEST IS SLOW
-    ------------------------------
-    The first request after starting Ollama (or after the model is
-    unloaded from memory) will be slow because Ollama needs to load
-    the model into GPU/CPU memory. On a Mac Mini with Apple Silicon:
-      - qwen2.5:0.5b: ~2 seconds to load
-      - llama3.1:8b:   ~10 seconds to load
-    Subsequent requests are much faster (100ms - 2s depending on model).
+    For complex returns with many fields, a dict is better because:
+      1. Fields are named (self-documenting)
+      2. You can add fields without breaking callers
+      3. Callers can access by name: result["answer"]
+
+    Tuples require positional access: result[0], which is fragile.
+
+    In production Python, you might use a dataclass or TypedDict:
+        @dataclass
+        class RoutingResult:
+            answer: str
+            chunks: list[dict]
+            ...
+
+    We use a plain dict for simplicity.
     """
+    timing = {}
+    debug = {}
+
     # ---------------------------------------------------------------
-    # Step 1: Build the system prompt
+    # Step 1: CLASSIFY THE QUERY
+    #
+    # Reuse your existing classify_query() from rag.py to determine
+    # whether this is a single-table or cross-entity question.
     # ---------------------------------------------------------------
-    if system_prompt is None:
-        # We use a SIMPLIFIED system prompt for local models.
-        # Small models (0.5B-3B) struggle with long system prompts.
-        # The full IMPROVED_SYSTEM_PROMPT from rag.py is ~800 tokens,
-        # which consumes a large fraction of a small model's capacity.
-        #
-        # This simplified version keeps the essential instructions.
-        system_prompt = (
-            "You are a data warehouse documentation assistant for Sigma Healthcare. "
-            "Answer questions about Snowflake tables, columns, and data lineage "
-            "using ONLY the provided context. "
-            "If the context does not contain the answer, say 'I don't have that information.' "
-            "Be concise and factual."
+    from rag import extract_table_name, classify_query, retrieve
+
+    classify_start = time.time()
+    query_type = classify_query(query)
+    detected_table = extract_table_name(query, known_tables)
+    timing["classify_ms"] = (time.time() - classify_start) * 1000
+
+    # ---------------------------------------------------------------
+    # Step 2: CHECK IF THIS IS A FOLLOW-UP QUESTION
+    #
+    # If memory is provided and the query looks like a follow-up,
+    # we include conversation history in the API call.
+    # ---------------------------------------------------------------
+    is_follow_up = False
+    if memory is not None:
+        is_follow_up = memory.is_follow_up(query)
+
+    # ---------------------------------------------------------------
+    # Step 3: DECIDE RETRIEVAL STRATEGY
+    #
+    # The key decision: how many chunks to retrieve.
+    #
+    # For cross-entity queries, we retrieve MORE chunks (10) because:
+    #   - The answer requires information from multiple tables
+    #   - We will rerank down to 3, so we need a large initial pool
+    #
+    # For simple queries, 3 chunks is sufficient because:
+    #   - The answer is in one table's documentation
+    #   - More chunks = more noise = worse answers
+    # ---------------------------------------------------------------
+    if query_type == "cross_entity":
+        retrieve_top_k = COMPLEX_TOP_K
+    else:
+        retrieve_top_k = SIMPLE_TOP_K
+
+    # ---------------------------------------------------------------
+    # Step 4: RETRIEVE CHUNKS
+    # ---------------------------------------------------------------
+    retrieve_start = time.time()
+    chunks = retrieve(
+        collection,
+        query,
+        top_k=retrieve_top_k,
+        table_name=detected_table,
+        known_tables=known_tables,
+    )
+    timing["retrieve_ms"] = (time.time() - retrieve_start) * 1000
+
+    debug["raw_chunk_count"] = len(chunks)
+    debug["detected_table"] = detected_table
+    debug["query_type"] = query_type
+
+    # ---------------------------------------------------------------
+    # Step 5: DECIDE RERANKING
+    #
+    # Reranking is beneficial when:
+    #   - We retrieved many chunks (cross_entity: 10 chunks)
+    #   - The query is complex (multiple tables, relationships)
+    #
+    # Reranking is NOT beneficial when:
+    #   - We retrieved few chunks (simple: 3 chunks)
+    #   - The chunks are already high-quality (table filter applied)
+    # ---------------------------------------------------------------
+    rerank_method = force_rerank  # Use override if provided
+
+    if rerank_method is None:
+        # Auto-decide: rerank only for complex queries with many chunks
+        if query_type == "cross_entity" and len(chunks) > RERANK_TOP_N:
+            rerank_method = RERANK_METHOD
+        else:
+            rerank_method = "none"
+
+    if rerank_method != "none" and len(chunks) > RERANK_TOP_N:
+        from reranker import rerank_chunks
+        rerank_start = time.time()
+        chunks = rerank_chunks(
+            query=query,
+            chunks=chunks,
+            top_n=RERANK_TOP_N,
+            method=rerank_method,
         )
+        timing["rerank_ms"] = (time.time() - rerank_start) * 1000
+        debug["reranked"] = True
+        debug["rerank_method"] = rerank_method
+    else:
+        timing["rerank_ms"] = 0
+        debug["reranked"] = False
+        debug["rerank_method"] = "none"
 
     # ---------------------------------------------------------------
-    # Step 2: Build the context string (same logic as ask_claude)
-    # ---------------------------------------------------------------
-    context_parts = []
-    for chunk in context_chunks:
-        label_parts = []
-        if chunk.get("table_name"):
-            label_parts.append(chunk["table_name"])
-        if chunk.get("doc_type") and chunk["doc_type"] != "text":
-            label_parts.append(chunk["doc_type"])
-        label = " - ".join(label_parts) if label_parts else chunk.get("source", "unknown")
-        context_parts.append(f"[Source: {label}]\n{chunk['text']}")
-
-    context = "\n\n---\n\n".join(context_parts)
-
-    # ---------------------------------------------------------------
-    # Step 3: Build the Ollama request payload
+    # Step 6: DECIDE MODEL
     #
-    # CRITICAL DIFFERENCE FROM ANTHROPIC API:
-    # Ollama puts the system prompt in the messages array as
-    # {"role": "system", ...}. Anthropic has a separate "system"
-    # parameter outside the messages array.
-    #
-    # Ollama format:
-    #   messages = [
-    #       {"role": "system", "content": "..."},
-    #       {"role": "user", "content": "..."},
-    #   ]
-    #
-    # Anthropic format:
-    #   system = "..."
-    #   messages = [
-    #       {"role": "user", "content": "..."},
-    #   ]
+    # The model choice depends on:
+    #   1. force_model override (from UI dropdown or eval flag)
+    #   2. Query complexity (simple -> Ollama, complex -> Claude)
+    #   3. Follow-up status (follow-ups need Claude for memory)
+    #   4. Ollama availability (fall back to Claude if not running)
     # ---------------------------------------------------------------
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": f"Context from documents:\n\n{context}\n\n---\n\nQuestion: {query}",
-        },
-    ]
+    if force_model is not None:
+        chosen_model = force_model
+    elif is_follow_up:
+        # Follow-ups need Claude because:
+        # 1. Memory support (Ollama does not use conversation history)
+        # 2. Pronoun resolution requires strong language understanding
+        chosen_model = COMPLEX_MODEL
+    elif query_type == "single_table":
+        chosen_model = SIMPLE_MODEL
+    else:
+        chosen_model = COMPLEX_MODEL
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,          # Get the full response at once
-        "options": {
-            "temperature": temperature,
-            "num_predict": 512,   # Max tokens to generate (like max_tokens)
-        },
+    # ---------------------------------------------------------------
+    # Step 6b: Verify Ollama availability, fall back if needed
+    # ---------------------------------------------------------------
+    if chosen_model.startswith("ollama/"):
+        from ollama_client import is_ollama_running
+        if not is_ollama_running():
+            debug["model_fallback"] = f"{chosen_model} -> {FALLBACK_MODEL}"
+            chosen_model = FALLBACK_MODEL
+
+    # ---------------------------------------------------------------
+    # Step 7: GENERATE THE ANSWER
+    # ---------------------------------------------------------------
+    from model_switcher import generate
+
+    generate_start = time.time()
+    try:
+        answer = generate(
+            query=query,
+            context_chunks=chunks,
+            model=chosen_model,
+            memory=memory if is_follow_up else None,
+        )
+    except Exception as e:
+        # ---------------------------------------------------------------
+        # Graceful degradation: if the chosen model fails, try fallback.
+        #
+        # This handles cases like:
+        #   - Ollama model crashes mid-generation
+        #   - Claude API rate limit
+        #   - Network timeout
+        #
+        # PYTHON REFRESHER: Exception chaining with "from"
+        # ---------------------------------------------------------------
+        # raise NewError("msg") from original_error
+        #
+        # This preserves the original traceback while adding context.
+        # Without "from", Python still shows both but the relationship
+        # is less clear.
+        # ---------------------------------------------------------------
+        if chosen_model != FALLBACK_MODEL:
+            debug["generation_error"] = str(e)
+            debug["model_fallback"] = f"{chosen_model} -> {FALLBACK_MODEL}"
+            chosen_model = FALLBACK_MODEL
+            try:
+                answer = generate(
+                    query=query,
+                    context_chunks=chunks,
+                    model=FALLBACK_MODEL,
+                    memory=memory if is_follow_up else None,
+                )
+            except Exception as fallback_error:
+                answer = f"Error generating response: {fallback_error}"
+        else:
+            answer = f"Error generating response: {e}"
+
+    timing["generate_ms"] = (time.time() - generate_start) * 1000
+
+    # ---------------------------------------------------------------
+    # Step 8: BUILD THE RESULT
+    # ---------------------------------------------------------------
+    total_ms = sum(timing.values())
+
+    routing_decision = {
+        "query_type": query_type,
+        "is_follow_up": is_follow_up,
+        "model": chosen_model,
+        "rerank_method": rerank_method,
+        "retrieve_top_k": retrieve_top_k,
     }
 
-    # ---------------------------------------------------------------
-    # Step 4: Send the request to Ollama
-    #
-    # PYTHON REFRESHER: requests.post() with JSON
-    # ---------------------------------------------------------------
-    # requests.post(url, json=payload) does three things:
-    #   1. Serializes payload to JSON string
-    #   2. Sets Content-Type header to application/json
-    #   3. Sends the POST request
-    #
-    # This is equivalent to:
-    #   headers = {"Content-Type": "application/json"}
-    #   body = json.dumps(payload)
-    #   requests.post(url, data=body, headers=headers)
-    # ---------------------------------------------------------------
-    try:
-        response = requests.post(
-            OLLAMA_CHAT_ENDPOINT,
-            json=payload,
-            timeout=OLLAMA_TIMEOUT,
-        )
-    except requests.ConnectionError:
-        raise ConnectionError(
-            "Cannot connect to Ollama. Is it running?\n"
-            "  Mac/Linux: ollama serve\n"
-            "  Windows:   Start the Ollama service or run 'ollama serve' in PowerShell"
-        )
-
-    # ---------------------------------------------------------------
-    # Step 5: Parse the response
-    #
-    # Ollama response format:
-    # {
-    #     "model": "qwen2.5:0.5b",
-    #     "message": {
-    #         "role": "assistant",
-    #         "content": "DIM_STORE is a dimension table..."
-    #     },
-    #     "done": true,
-    #     "total_duration": 1234567890,  # nanoseconds
-    #     "eval_count": 150              # tokens generated
-    # }
-    #
-    # Compare with Anthropic response format:
-    # {
-    #     "content": [{"type": "text", "text": "DIM_STORE is..."}],
-    #     "usage": {"input_tokens": 500, "output_tokens": 150}
-    # }
-    # ---------------------------------------------------------------
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Ollama returned HTTP {response.status_code}: {response.text}"
-        )
-
-    data = response.json()
-
-    # ---------------------------------------------------------------
-    # Extract the answer text.
-    #
-    # PYTHON REFRESHER: Safe nested dict access with .get()
-    # ---------------------------------------------------------------
-    # data["message"]["content"]  # Raises KeyError if "message" missing
-    # data.get("message", {}).get("content", "")  # Returns "" if missing
-    #
-    # The second form is "safe" because it never raises KeyError.
-    # The trade-off: if the format is wrong, you get an empty string
-    # instead of an error, which could hide bugs.
-    #
-    # We use the first form here because if Ollama's response format
-    # changes, we WANT to see an error (fail loudly vs silently).
-    # ---------------------------------------------------------------
-    try:
-        answer = data["message"]["content"]
-    except (KeyError, TypeError) as e:
-        raise RuntimeError(
-            f"Unexpected Ollama response format: {e}\n"
-            f"Response: {json.dumps(data, indent=2)[:500]}"
-        )
-
-    return answer.strip()
+    return {
+        "answer": answer,
+        "chunks": chunks,
+        "routing": routing_decision,
+        "timing": {
+            **timing,
+            "total_ms": total_ms,
+        },
+        "debug": debug,
+    }
 
 
 # =====================================================================
-# SECTION 3: STANDALONE TEST
+# SECTION 3: UTILITY -- EXPLAIN ROUTING (FOR DEBUG PANEL)
+# =====================================================================
+
+def explain_routing(routing_decision: dict) -> str:
+    """
+    Generate a human-readable explanation of the routing decision.
+
+    This is displayed in the Streamlit debug panel so you can
+    understand WHY the router made each decision.
+
+    EXAMPLE OUTPUT
+    --------------
+    "Query type: cross_entity | Follow-up: No | Model: claude |
+     Reranking: llm (10 -> 3) | Rationale: Complex query needs
+     wide retrieval and strong reasoning"
+    """
+    qt = routing_decision["query_type"]
+    fu = "Yes" if routing_decision["is_follow_up"] else "No"
+    model = routing_decision["model"]
+    rerank = routing_decision["rerank_method"]
+    top_k = routing_decision["retrieve_top_k"]
+
+    # Build rationale
+    if routing_decision["is_follow_up"]:
+        rationale = "Follow-up detected -- using Claude with memory for context"
+    elif qt == "cross_entity":
+        rationale = f"Cross-entity query -- retrieved {top_k} chunks, reranked to {RERANK_TOP_N}"
+    elif qt == "single_table":
+        rationale = f"Simple lookup -- {top_k} chunks, {'local model' if 'ollama' in model else 'Claude'}"
+    else:
+        rationale = f"Default routing -- {top_k} chunks via {model}"
+
+    return (
+        f"Type: {qt} | Follow-up: {fu} | Model: {model} | "
+        f"Rerank: {rerank} | {rationale}"
+    )
+
+
+# =====================================================================
+# SECTION 4: STANDALONE TEST
 # =====================================================================
 
 if __name__ == "__main__":
+    import os
+
     print("=" * 60)
-    print("OLLAMA CLIENT -- STANDALONE TEST")
+    print("QUERY ROUTER -- STANDALONE TEST")
     print("=" * 60)
 
-    # Step 1: Check if Ollama is running
-    print("\nChecking Ollama connection...")
-    if not is_ollama_running():
-        print("  Ollama is NOT running.")
-        print("  Start it with: ollama serve")
-        print("  Then pull a model: ollama pull qwen2.5:0.5b")
-        print("\n  Skipping live test. The code structure is correct.")
-        print("  You can verify by starting Ollama and re-running this script.")
-        exit(0)
+    # Load .env for API key
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, value = line.partition("=")
+                    os.environ[key.strip()] = value.strip()
 
-    print("  Ollama is running.")
+    # Build the pipeline (same as app.py and eval.py)
+    from rag import load_documents, chunk_text, build_vector_store, DOCS_DIR
+    from conversation_memory import ConversationMemory
 
-    # Step 2: List available models
-    models = list_available_models()
-    print(f"\nAvailable models: {models}")
+    print("\nBuilding RAG pipeline...")
+    documents = load_documents(DOCS_DIR)
+    if not documents:
+        print(f"No documents found in {DOCS_DIR}/. Add STTM files to test.")
+        exit(1)
 
-    if not models:
-        print("  No models downloaded. Run: ollama pull qwen2.5:0.5b")
-        exit(0)
+    all_chunks = []
+    for doc in documents:
+        chunks = chunk_text(doc["content"], doc["source"])
+        all_chunks.extend(chunks)
+    collection = build_vector_store(all_chunks)
 
-    # Step 3: Test generation with fake chunks
-    test_model = models[0]  # Use the first available model
-    print(f"\nTesting with model: {test_model}")
+    all_meta = collection.get()
+    known_tables = sorted(list(set(
+        m.get("table_name", "")
+        for m in all_meta["metadatas"]
+        if m.get("table_name") and m["table_name"].strip()
+    )))
 
-    test_chunks = [
+    print(f"Pipeline ready: {len(all_chunks)} chunks, {len(known_tables)} tables")
+
+    # Create memory for follow-up testing
+    memory = ConversationMemory(max_turns=3)
+
+    # Test queries
+    test_cases = [
         {
-            "text": "DIM_STORE is a dimension table. Grain: one row per store location. "
-                    "Primary Key: SK_STORE_KEY (surrogate). Business Key: BK_STORE_KEY. "
-                    "Source System: SAP via CDS View.",
-            "source": "STTM__DIM_STORE__summary",
-            "table_name": "DIM_STORE",
-            "doc_type": "summary",
+            "query": "What is the grain of DIM_STORE?",
+            "expected_type": "single_table",
+            "note": "Simple lookup -- should use Ollama if available",
+        },
+        {
+            "query": "Which dimensions does FACT_SALES_ORDER reference?",
+            "expected_type": "cross_entity",
+            "note": "Cross-entity -- should use Claude with reranking",
         },
     ]
 
-    test_query = "What is the grain of DIM_STORE?"
-    print(f"  Query: {test_query}")
+    for tc in test_cases:
+        print(f"\n{'='*50}")
+        print(f"Query: {tc['query']}")
+        print(f"Expected type: {tc['expected_type']}")
+        print(f"Note: {tc['note']}")
 
-    start = time.time()
-    try:
-        answer = ask_ollama(test_query, test_chunks, model=test_model)
-        elapsed = time.time() - start
-        print(f"  Answer ({elapsed:.1f}s): {answer[:200]}")
-    except Exception as e:
-        print(f"  Error: {e}")
+        # Force Claude to avoid Ollama dependency in test
+        result = route_query(
+            query=tc["query"],
+            collection=collection,
+            known_tables=known_tables,
+            memory=memory,
+            force_model="claude",         # Force Claude for testing
+            force_rerank="keyword",       # Use free reranker for testing
+        )
 
-    print("\nAll tests passed. ollama_client.py is ready.")
+        print(f"\nRouting: {explain_routing(result['routing'])}")
+        print(f"Timing: {result['timing']}")
+        print(f"Answer: {result['answer'][:150]}...")
+
+    # Test follow-up detection
+    print(f"\n{'='*50}")
+    print("Testing follow-up routing...")
+    memory.add_turn("What is DIM_STORE?", "DIM_STORE is a dimension table...")
+
+    follow_up_result = route_query(
+        query="What about its foreign keys?",
+        collection=collection,
+        known_tables=known_tables,
+        memory=memory,
+        force_model="claude",
+        force_rerank="none",
+    )
+    print(f"Routing: {explain_routing(follow_up_result['routing'])}")
+    print(f"Follow-up detected: {follow_up_result['routing']['is_follow_up']}")
+    print(f"Answer: {follow_up_result['answer'][:150]}...")
+
+    print("\nAll tests passed. query_router.py is ready.")
