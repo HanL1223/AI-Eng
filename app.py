@@ -22,6 +22,9 @@ and used EXACTLY as they are — no changes needed to rag.py.
 import os
 import time
 import streamlit as st
+from conversation_memory import ConversationMemory
+from query_router import route_query, explain_routing
+from model_switcher import list_models
 
 from rag import (
     load_documents,           # Loads .txt, .md, .xlsx from docs/
@@ -173,6 +176,18 @@ if "query_count" not in st.session_state:
 
 if "sources_log" not in st.session_state:
     st.session_state["sources_log"] = {} 
+
+if "memory" not in st.session_state:
+    st.session_state["memory"] = ConversationMemory(max_turns=5)
+
+if "selected_model" not in st.session_state:
+    st.session_state["selected_model"] = None  # None = auto (router decides)
+
+if "rerank_method" not in st.session_state:
+    st.session_state["rerank_method"] = "auto"
+
+if "routing_log" not in st.session_state:
+    st.session_state["routing_log"] = {}
 
 collection, known_tables, num_chunks, num_docs = init_pipeline()
 
@@ -391,6 +406,48 @@ with st.sidebar:
 
     st.divider()
 
+    # ── NEW: Model Selection ──
+    available_models = list_models()
+    model_options = {m["name"]: m["id"] for m in available_models if m["available"]}
+
+    if model_options:
+        display_options = ["Auto (Router Decides)"] + list(model_options.keys())
+        selected_display = st.selectbox(
+            "Model",
+            display_options,
+            index=0,
+            help="Auto lets the query router choose based on query complexity.",
+        )
+        if selected_display == "Auto (Router Decides)":
+            st.session_state["selected_model"] = None
+        else:
+            st.session_state["selected_model"] = model_options[selected_display]
+
+    # ── NEW: Reranking Control ──
+    rerank_options = {
+        "Auto (Router Decides)": "auto",
+        "BM25 (Free)": "bm25",
+        "LLM Reranker (Haiku)": "llm",
+        "Off": "none",
+    }
+    selected_rerank = st.selectbox(
+        "Reranking",
+        list(rerank_options.keys()),
+        index=0,
+        help="Auto enables reranking for complex queries only.",
+    )
+    st.session_state["rerank_method"] = rerank_options[selected_rerank]
+
+    # ── NEW: Memory Stats ──
+    memory = st.session_state["memory"]
+    stats = memory.get_stats()
+    st.caption(
+        f"Memory: {stats['window_turns']}/{stats['max_turns']} turns | "
+        f"~{stats['estimated_tokens']} tokens"
+    )
+
+    st.divider()
+
     # ─── File Upload ───
     # st.file_uploader() creates a drag-and-drop zone.
     #
@@ -441,7 +498,9 @@ with st.sidebar:
     if col1.button("Clear Chat", use_container_width=True):
         st.session_state["messages"] = []
         st.session_state["sources_log"] = {}
+        st.session_state["routing_log"] = {}              # NEW
         st.session_state["query_count"] = 0
+        st.session_state["memory"] = ConversationMemory(max_turns=5)  # NEW
         st.rerun()
 
     if col2.button("re-index",use_container_width=True,
@@ -490,7 +549,7 @@ for i,msg in enumerate(st.session_state['messages']):
         if (
             st.session_state['debug_mode']
             and msg['role'] =='assistant'
-            and msg.get('debug_info')
+            and i in st.session_state['routing_log']
         ):
             debug = msg["debug_info"]
             with st.expander("Debug: Retrieved Chunks", expanded=False):
@@ -540,34 +599,25 @@ if query:
     with st.chat_message("assistant"):
         with st.spinner("Searching document and generating answer..."):
             #detech table name
-            detected = extract_table_name(query,known_tables)
-
-            #Retrieve relevant chunks
-            retrieval_start = time.time()
-            chunks = retrieve(
-                collection,
-                query,
-                table_name=detected,
-                known_tables=known_tables,
+            force_model = st.session_state["selected_model"]  # None = auto
+            force_rerank = (
+                None if st.session_state["rerank_method"] == "auto"
+                else st.session_state["rerank_method"]
             )
-            retrieval_time = time.time() - retrieval_start
 
-            #Generate answer via LLM
-            # Right now, each question is independent — Claude has
-            # no memory of previous questions in this session.
-            # In Week 4, we'll replace this with ask_claude_with_memory()
-            # that passes st.session_state["messages"] to the API,
-            # enabling follow-up questions like:
-            #   "Tell me about DIM_STORE"
-            #   "What about its foreign keys?"  ← Claude knows "its" = DIM_STORE
-            generation_start = time.time()
-            try:
-                answer = ask_claude(query,chunks)
-            except Exception as e:
-                answer = f"Error generation response: {e}"
-            generation_time = time.time() - generation_start
+            result = route_query(
+                query=query,
+                collection=collection,
+                known_tables=known_tables,
+                memory=st.session_state["memory"],
+                force_model=force_model,
+                force_rerank=force_rerank,
+            )
 
-            total_time = retrieval_time + generation_time
+            answer = result["answer"]
+            chunks = result["chunks"]
+            routing = result["routing"]
+            timing = result["timing"]
 
         #Extract citations and display
         citations = extract_citation(chunks)
@@ -576,52 +626,42 @@ if query:
         #Display answer
         st.markdown(answer)
 
-        if citation_text:
-            st.caption(citation_text)
-        
-        debug_info = {
-            "detected_table":detected,
-            "timing":{
-                "retrieval":retrieval_time,
-                "generation":generation_time,
-                "total":total_time
-            },
-            "chunks": chunks,
-        }
         #Show debug panel if enable
-        if st.session_state['debug_mode']:
-            with st.expander("Debug:Retrieved Chunks",expanded=False):
-                t = debug_info['timing']
+        if st.session_state["debug_mode"]:
+            with st.expander("Debug: Routing + Retrieval", expanded=False):
+                st.text(f"Routing: {explain_routing(routing)}")
                 st.text(
-                    f"Retrieval: {t['retrieval']:.2f}s | "
-                    f"Generation: {t['generation']:.2f}s | "
-                    f"Total: {t['total']:.2f}s"
+                    f"Timing: classify={timing.get('classify_ms', 0):.0f}ms | "
+                    f"retrieve={timing.get('retrieve_ms', 0):.0f}ms | "
+                    f"rerank={timing.get('rerank_ms', 0):.0f}ms | "
+                    f"generate={timing.get('generate_ms', 0):.0f}ms | "
+                    f"total={timing.get('total_ms', 0):.0f}ms"
                 )
-                if detected:
-                    st.text(f"Detected table: {detected}")
+                mem_stats = st.session_state["memory"].get_stats()
+                st.text(
+                    f"Memory: {mem_stats['window_turns']}/{mem_stats['max_turns']} turns | "
+                    f"Follow-up: {routing['is_follow_up']}"
+                )
+                debug = result.get("debug", {})
+                if debug.get("detected_table"):
+                    st.text(f"Detected table: {debug['detected_table']}")
                 for j, chunk in enumerate(chunks):
-                    dist_str = (
-                        f" (d={chunk['distance']:.3f})"
-                        if chunk.get('distance')
-                        else ""
-
-                    )
+                    rerank_info = ""
+                    if chunk.get("rerank_score") is not None:
+                        rerank_info = f" rerank={chunk['rerank_score']:.2f}"
+                    dist_str = f" d={chunk['distance']:.3f}" if chunk.get("distance") else ""
                     st.text(
-                        f"[{j+1}] {chunk.get('table_name','?')}"
-                        f"({chunk.get('doc_type',"?")}){dist_str}"
+                        f"[{j+1}] {chunk.get('table_name', '?')} "
+                        f"({chunk.get('doc_type', '?')}){dist_str}{rerank_info}"
                     )
-                    st.code(chunk.get("text","")[:300],language=None)
+                    st.code(chunk.get("text", "")[:300], language=None)
         #Show detailed source panel                   
         render_sources_detail(chunks)
 
         #show timing as caption
-        table_info = f" | Table: {detected}" if detected else ""
-        st.caption(
-            f" Retrieval: {retrieval_time:.2f}s | "
-            f"Generation: {generation_time:.2f}s | "
-            f"Total: {total_time:.2f}s"
-            f"{table_info}"
-        )
+       # table_info = f" | Table: {detected}" if detected else ""
+        total_s = timing.get("total_ms", 0) / 1000
+        st.caption(f"Model: {routing['model']} | Total: {total_s:.2f}s")
 
 
     #Save to session state
@@ -643,12 +683,11 @@ if query:
         "role": "assistant",
         "content": answer,
         "citations": citations,
-        "debug_info": debug_info,
     })
     # Save source chunks for detailed source panel on reruns
     msg_index = len(st.session_state["messages"]) - 1
     st.session_state["sources_log"][msg_index] = chunks
-
+    st.session_state["routing_log"][msg_index] = routing
     # Update query counter
     st.session_state["query_count"] += 1
 
