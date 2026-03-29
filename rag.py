@@ -107,6 +107,20 @@ def load_documents(docs_dir:str) -> list[str]:
         excel_docs = load_sttm_workbook(filepath)
         documents.extend(excel_docs)
 
+    for filepath in glob.glob(os.path.join(docs_dir, "*.pdf")):
+        try:
+            from pdf_loader import load_pdf
+            doc = load_pdf(filepath)
+            if doc:
+                documents.append(doc)
+                print(f"  Loaded PDF: {os.path.basename(filepath)} "
+                      f"({len(doc['content']):,} chars)")
+        except ImportError:
+            print(f"  Skipped PDF '{os.path.basename(filepath)}': "
+                  f"pymupdf not installed (uv add pymupdf)")
+        except Exception as e:
+            print(f"  Error loading PDF '{os.path.basename(filepath)}': {e}")
+
     return documents
 
 #Chunk Documents
@@ -682,7 +696,7 @@ def main():
             continue
         if query.lower() == "quit":
             break
-        if query.lower == 'debug':
+        if query.lower() == 'debug':
             debug_mode = not debug_mode
             print(f"Debug {'ON' if debug_mode else 'OFF'}")
             continue

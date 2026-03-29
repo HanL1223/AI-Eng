@@ -7,3 +7,4 @@ eval_results/
 .streamlit/
 docs/*.xlsx
 docs/*.xls
+logs/
