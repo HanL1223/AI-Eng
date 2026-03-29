@@ -7,7 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.84.0",
     "chromadb>=1.5.2",
+    "openai>=2.30.0",
     "openpyxl>=3.1.5",
+    "pymupdf>=1.27.2.2",
     "rank-bm25>=0.2.2",
     "streamlit>=1.55.0",
+    "voyageai>=0.3.7",
 ]
