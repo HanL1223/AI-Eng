@@ -57,7 +57,6 @@ HOW THIS FILE CONNECTS SO FAR
   app.py shows reranking info in the debug panel:
     --> "Reranked: chunk moved from position 7 to position 1"
 """
-
 import time
 import re
 import os
