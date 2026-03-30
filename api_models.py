@@ -114,3 +114,18 @@ class QueryRequest(BaseModel):
         }
     }
 
+class FeedbackRequest(BaseModel):
+    """
+    Request body for the POST /api/feedback endpoint.
+
+    Allows users to rate a response as helpful or not.
+    This data feeds into your evaluation pipeline.
+
+    EXAMPLE REQUEST:
+    {
+        "query": "What is the grain of DIM_STORE?",
+        "answer": "The grain is one row per store.",
+        "rating": 5,
+        "comment": "Correct and clear"
+    }
+    """

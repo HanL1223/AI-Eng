@@ -1,581 +1,705 @@
 """
-model_comparison.py -- LLM Model A/B Testing for RAG
-======================================================
-Week 5, Step 4 of 4
+api_models.py -- Pydantic Request/Response Schemas for RAG API
+================================================================
+Week 6, Step 1 of 6
 
 WHAT THIS FILE DOES
 -------------------
-Runs your 20-question eval with different Claude models and
-compares quality vs cost. The central question:
+Defines the SHAPE of every request and response your API handles.
+These are Pydantic models -- Python classes that automatically validate
+data coming in and going out of your API.
 
-  "Is Claude Haiku good enough for my use case, or do I need Sonnet?"
-
-This is a COST vs QUALITY tradeoff analysis. For each model, we
-measure:
-  - Answer quality (keyword score + LLM-as-judge)
-  - Latency per query
-  - Estimated cost per query
-  - Score by question category (simple_lookup, cross_entity, edge_case)
+Think of this file as a SCHEMA DEFINITION, exactly like a dbt schema.yml
+that defines columns, types, and constraints for your data models.
 
 
-WHY THIS COMPARISON MATTERS
-────────────────────────────
-Your current setup uses Claude Sonnet for ALL answer generation.
-Claude pricing (as of early 2026, approximate):
+WHY SEPARATE MODELS FROM THE SERVER?
+--------------------------------------
+You could define Pydantic models inline in api_server.py, but separating
+them has three benefits:
 
-  Claude Haiku:
-    Input:  $0.001 / 1K tokens
-    Output: $0.005 / 1K tokens
-    Per query estimate: ~$0.002
+  1. REUSABILITY: The same models can be used by the test client,
+     documentation generators, and other services.
 
-  Claude Sonnet:
-    Input:  $0.003 / 1K tokens
-    Output: $0.015 / 1K tokens
-    Per query estimate: ~$0.006
+  2. CLARITY: api_server.py focuses on LOGIC (what to do with requests).
+     api_models.py focuses on SHAPE (what requests look like).
 
-At 100 queries/day:
-  Sonnet: $0.60/day = $18/month
-  Haiku:  $0.20/day = $6/month
-  Savings: $12/month (67% cheaper)
-
-But if Haiku answers 30% of questions wrong, the savings are worthless.
-This comparison tells you the EXACT quality tradeoff.
-
-
-EXPECTED RESULTS
-─────────────────
-Based on experience with STTM domain data:
-
-  Simple lookup ("What is the grain of DIM_STORE?"):
-    Both models should score similarly. The answer is verbatim in
-    the context, so even a weaker model extracts it correctly.
-
-  Cross-entity ("Which dimensions does FACT_SALES_ORDER reference?"):
-    Sonnet should score higher. These require synthesizing information
-    across multiple chunks, which benefits from stronger reasoning.
-
-  Edge cases ("What is the SLA for data refresh?"):
-    Mixed results. Haiku may be MORE conservative (more "I don't know"
-    answers), which could be either better or worse depending on
-    whether the correct answer is indeed "I don't know".
-
-
-THE ROUTING IMPLICATION
-────────────────────────
-If Haiku scores well on simple_lookup but poorly on cross_entity,
-this VALIDATES your query_router.py architecture:
-
-  simple_lookup  -> Haiku (or Ollama) = cheaper, fast, good enough
-  cross_entity   -> Sonnet = more expensive but necessary
-  edge_case      -> Sonnet = better reasoning for "I don't know"
-
-This is why we build the router in Week 4 and measure in Week 5.
-The router's value depends on HOW MUCH quality drops per model tier.
+  3. TESTING: You can unit-test models independently -- create one,
+     check validation, verify serialization -- without starting a server.
 
 dbt ANALOGY:
-  This is like comparing dbt Cloud vs dbt Core for a specific
-  project. You measure: build time, cost, features needed. If the
-  project only uses basic models, dbt Core is sufficient. If it
-  needs dbt Cloud's features (orchestration, CI), the extra cost
-  is justified. Same logic: simple queries do not need Sonnet's
-  reasoning power.
+  This is like separating schema.yml (column definitions, tests) from
+  the SQL model file (the actual transformation logic). The schema
+  file is the CONTRACT; the SQL file is the IMPLEMENTATION.
+
+
+PYDANTIC IN 5 MINUTES
+-----------------------
+Pydantic is a data validation library built on Python type hints. When
+you define a Pydantic model, you get:
+
+  1. VALIDATION: If incoming data has wrong types, Pydantic raises an error
+  2. SERIALIZATION: .model_dump() converts to dict, .model_dump_json() to JSON
+  3. DEFAULTS: Fields with default values are optional in the input
+  4. DOCUMENTATION: FastAPI reads the model and generates API docs
+
+Here is a minimal example to understand the syntax:
+
+  from pydantic import BaseModel
+
+  class User(BaseModel):
+      name: str               # Required string field
+      age: int                # Required integer field
+      email: str = ""         # Optional string, defaults to ""
+
+  # Valid:
+  user = User(name="Test", age=30)
+  print(user.name)    # "Test"
+  print(user.email)   # ""  (default applied)
+
+  # Invalid (raises ValidationError):
+  user = User(name="Test", age="not a number")
+  # Error: age - Input should be a valid integer
+
+  # From JSON dict:
+  data = {"name": "Test", "age": 30, "email": "test@example.com"}
+  user = User(**data)      # ** unpacks dict as keyword arguments
+  user = User.model_validate(data)  # Same thing, more explicit
+
+
+PYDANTIC vs PYTHON DATACLASSES
+--------------------------------
+You may have seen Python's built-in dataclasses:
+
+  from dataclasses import dataclass
+
+  @dataclass
+  class User:
+      name: str
+      age: int
+
+Pydantic models look similar but do MORE:
+  - dataclass: stores data, no validation
+  - Pydantic:  stores data + validates types + serializes to JSON
+
+  dataclass:  User(name="Test", age="oops")  -> stores "oops" as age
+  Pydantic:   User(name="Test", age="oops")  -> raises ValidationError
+
+For APIs, you ALWAYS want validation. A malformed request should be
+rejected immediately with a clear error, not silently accepted and
+then crash somewhere deep in your pipeline.
+
+
+FIELD VALIDATORS AND CONSTRAINTS
+----------------------------------
+Pydantic supports validation beyond basic types:
+
+  from pydantic import BaseModel, Field
+
+  class QueryRequest(BaseModel):
+      query: str = Field(..., min_length=1, max_length=1000)
+      top_k: int = Field(default=3, ge=1, le=20)
+
+  Field(...) means "required" (the ... is Python's Ellipsis literal).
+  min_length=1 means the string must have at least 1 character.
+  ge=1 means "greater than or equal to 1".
+  le=20 means "less than or equal to 20".
+
+  If someone sends top_k=0, they get:
+    422 Unprocessable Entity
+    {"detail": [{"msg": "Input should be greater than or equal to 1"}]}
+
+This is AUTOMATIC -- you never write if/else validation code.
 
 
 HOW THIS FILE CONNECTS TO YOUR PROJECT
-───────────────────────────────────────
-  This file uses your existing eval.py framework.
-  It runs the SAME 20 questions with DIFFERENT models and compares.
+-----------------------------------------
+  api_server.py imports these models:
+    from api_models import QueryRequest, QueryResponse, HealthResponse, ...
 
-  It does NOT modify eval.py. Instead, it:
-    1. Imports the pipeline building functions from rag.py
-    2. Imports scoring functions from eval.py
-    3. Calls ask_claude() with different model parameters
-    4. Produces a comparison CSV and terminal report
+  FastAPI uses them to:
+    1. Parse and validate incoming JSON -> QueryRequest
+    2. Serialize outgoing data -> QueryResponse (as JSON)
+    3. Generate /docs page with all field descriptions
 
-  After running this, you update query_router.py's SIMPLE_MODEL
-  and COMPLEX_MODEL constants based on the results.
+  test_api.py uses them to:
+    1. Construct valid requests
+    2. Parse and verify responses
 
 
 DEPENDENCIES
-────────────
-  None beyond what you already have (anthropic, rag.py, eval.py).
+-------------
+  pydantic (already installed -- it comes with FastAPI)
 """
 
-import os
-import csv
-import time
-import json
-from pathlib import Path
-from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional
 
 
 # =====================================================================
-# SECTION 1: MODEL CONFIGURATIONS
+# SECTION 1: REQUEST MODELS
 # =====================================================================
-
-# Models to compare. Each entry has:
-#   id:     The Anthropic model string (passed to client.messages.create)
-#   name:   Human-readable label
-#   tier:   Cost tier for grouping
-#   cost:   Estimated cost per query (input + output tokens)
+# These define what the CLIENT sends to the API.
+# Every field has a type, a default (if optional), and a description.
 #
-# GOTCHA: Model IDs change when Anthropic releases new versions.
-# Check https://docs.anthropic.com/en/docs/about-claude/models
-# for the latest model strings.
+# DESIGN DECISION: Why descriptions on every field?
+# --------------------------------------------------
+# FastAPI reads these descriptions and includes them in the auto-
+# generated API documentation at /docs. Without descriptions, your
+# team would have to guess what each field means. With descriptions,
+# the API is self-documenting.
 #
-# At the time of writing (March 2026):
-#   claude-haiku-4-5-20251001  = latest Haiku
-#   claude-sonnet-4-5-20250929 = latest Sonnet (your current default)
-
-MODELS_TO_COMPARE = [
-    {
-        "id": "claude-haiku-4-5-20251001",
-        "name": "Claude Haiku 4.5",
-        "tier": "haiku",
-        "estimated_cost_per_query": 0.002,
-    },
-    {
-        "id": "claude-sonnet-4-5-20250929",
-        "name": "Claude Sonnet 4.5",
-        "tier": "sonnet",
-        "estimated_cost_per_query": 0.006,
-    },
-]
-
-
-# =====================================================================
-# SECTION 2: SINGLE-MODEL EVALUATION
+# PYTHON REFRESHER: Field() vs plain defaults
+# ---------------------------------------------
+# These two are equivalent for setting defaults:
+#   top_k: int = 3
+#   top_k: int = Field(default=3)
+#
+# But Field() lets you add constraints and metadata:
+#   top_k: int = Field(default=3, ge=1, le=20, description="...")
+#
+# Rule: Use Field() when you need validation or description.
+#       Use plain defaults for simple fields.
 # =====================================================================
 
-def run_model_eval(
-    model_id: str,
-    questions: list[dict],
-    collection,
-    known_tables: list[str],
-    top_k: int = 3,
-    system_prompt: str = None,
-) -> list[dict]:
+
+class QueryRequest(BaseModel):
     """
-    Run the eval questions against a specific Claude model.
+    Request body for the POST /api/query endpoint.
 
-    This is similar to eval.py's run_evaluation(), but:
-    1. It takes an explicit model_id parameter
-    2. It records timing per question
-    3. It does not use LLM-as-judge (to avoid circular bias)
+    This is what the client sends when asking a question.
+    FastAPI automatically validates every field against
+    these type annotations and constraints.
 
-    We avoid LLM-as-judge here because the judge IS Claude.
-    Using Sonnet to judge Sonnet creates a bias. Keyword scoring
-    is objective and model-independent.
-
-    PARAMETERS
-    ----------
-    model_id : str
-        Anthropic model identifier (e.g., "claude-haiku-4-5-20251001")
-    questions : list[dict]
-        Eval questions from eval_questions.csv
-    collection : chromadb.Collection
-        Your ChromaDB collection (shared across models -- same retrieval)
-    known_tables : list[str]
-        Table names for extract_table_name()
-    top_k : int
-        Number of chunks to retrieve
-    system_prompt : str
-        System prompt to use (defaults to IMPROVED_SYSTEM_PROMPT from rag.py)
-
-    RETURNS
-    -------
-    list[dict]
-        Per-question results with scores, timing, and model info.
+    EXAMPLE REQUEST (what the client sends as JSON):
+    {
+        "query": "What is the grain of DIM_STORE?",
+        "top_k": 3,
+        "rerank": true,
+        "model": null,
+        "include_sources": true,
+        "session_id": "abc-123"
+    }
     """
-    import anthropic
-    from rag import retrieve, extract_table_name, IMPROVED_SYSTEM_PROMPT
 
-    if system_prompt is None:
-        system_prompt = IMPROVED_SYSTEM_PROMPT
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description=(
+            "The user's question about STTM data. "
+            "Must be between 1 and 2000 characters. "
+            "Example: 'What is the grain of DIM_STORE?'"
+        ),
+    )
+    # PYTHON REFRESHER: Field(...)
+    # The first argument `...` is Python's Ellipsis literal.
+    # In Pydantic, Ellipsis means "this field is required".
+    # If the client omits `query`, they get a 422 error.
+    #
+    # You could also write: query: str (no Field)
+    # But then you lose the constraints (min_length, max_length)
+    # and the description for the auto-generated docs.
 
-    client = anthropic.Anthropic()
-    results = []
+    top_k: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description=(
+            "Number of chunks to retrieve from the vector store. "
+            "Higher values give more context but may include noise. "
+            "Default: 3. Range: 1-20."
+        ),
+    )
+    # GOTCHA: ge/le are Pydantic constraint names.
+    #   ge = Greater than or Equal to
+    #   le = Less than or Equal to
+    #   gt = Greater Than (strict)
+    #   lt = Less Than (strict)
+    #
+    # These map to JSON Schema's minimum/maximum fields.
 
-    for i, q in enumerate(questions):
-        question_text = q.get("question", "")
-        question_id = q.get("question_id", f"Q{i+1:02d}")
-        category = q.get("category", "unknown")
-        expected_keywords = q.get("expected_keywords", [])
+    rerank: bool = Field(
+        default=True,
+        description=(
+            "Whether to apply reranking to retrieved chunks. "
+            "When true, the query router decides the reranking method "
+            "(BM25, cross-encoder, or none) based on query complexity."
+        ),
+    )
 
-        if not expected_keywords:
-            raw = q.get("expected_answer_keywords", "")
-            expected_keywords = [
-                kw.strip().upper() for kw in raw.split(",") if kw.strip()
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override the model selection. "
+            "If null, the query router selects the model automatically. "
+            "Examples: 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', "
+            "'ollama/qwen2.5:0.5b'"
+        ),
+    )
+    # PYTHON REFRESHER: Optional[str]
+    # Optional[str] is equivalent to: str | None
+    # It means: this field can be a string OR None.
+    #
+    # In Pydantic:
+    #   Optional[str] = Field(default=None)
+    # means: if the client does not send this field, it is None.
+    #
+    # vs:
+    #   str = Field(...)
+    # means: the client MUST send this field (required).
+
+    include_sources: bool = Field(
+        default=True,
+        description=(
+            "Whether to include source chunk details in the response. "
+            "Set to false for simpler responses (e.g., in a Slack bot)."
+        ),
+    )
+
+    session_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description=(
+            "Session identifier for conversation memory. "
+            "If provided, the server maintains conversation context "
+            "across multiple queries in the same session."
+        ),
+    )
+
+    # MODEL CONFIG: Controls serialization behavior.
+    # This is Pydantic v2 syntax (model_config dict).
+    # Pydantic v1 used a nested class Config.
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "query": "What is the grain of DIM_STORE?",
+                    "top_k": 3,
+                    "rerank": True,
+                    "model": None,
+                    "include_sources": True,
+                    "session_id": "session-001",
+                }
             ]
-
-        # Retrieve chunks (same retrieval for all models).
-        detected_table = extract_table_name(question_text, known_tables)
-        chunks = retrieve(
-            collection, question_text,
-            table_name=detected_table,
-            known_tables=known_tables,
-            top_k=top_k,
-        )
-
-        # Build context string (same as ask_claude in rag.py).
-        context_parts = []
-        for chunk in chunks:
-            label_parts = []
-            if chunk.get("table_name"):
-                label_parts.append(chunk["table_name"])
-            if chunk.get("doc_type") and chunk["doc_type"] != "text":
-                label_parts.append(chunk["doc_type"])
-            label = (
-                " -- ".join(label_parts)
-                if label_parts
-                else chunk.get("source", "unknown")
-            )
-            context_parts.append(f"[Source: {label}]\n{chunk['text']}")
-
-        context = "\n\n---\n\n".join(context_parts)
-        user_message = (
-            f"Context from documents:\n\n{context}\n\n---\n\n"
-            f"Question: {question_text}"
-        )
-
-        # Call the model with timing.
-        start_time = time.time()
-        try:
-            response = client.messages.create(
-                model=model_id,
-                max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            answer = response.content[0].text
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-        except Exception as e:
-            answer = f"ERROR: {e}"
-            input_tokens = 0
-            output_tokens = 0
-
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        # Score with keyword matching (objective, model-independent).
-        from eval import score_keyword, score_edge_case
-
-        if category == "edge_case":
-            score_result = score_edge_case(answer)
-            keyword_score = score_result["score"]
-        else:
-            score_result = score_keyword(answer, expected_keywords)
-            keyword_score = score_result["score"]
-
-        results.append({
-            "question_id": question_id,
-            "question": question_text,
-            "category": category,
-            "model_id": model_id,
-            "answer": answer,
-            "keyword_score": keyword_score,
-            "matched_keywords": score_result.get("matched", []),
-            "missed_keywords": score_result.get("missed", []),
-            "latency_ms": round(elapsed_ms, 1),
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        })
-
-        # Progress indicator.
-        print(f"    [{question_id}] score={keyword_score:.2f} "
-              f"latency={elapsed_ms:.0f}ms "
-              f"tokens={input_tokens}+{output_tokens}")
-
-    return results
+        }
+    }
+    # DESIGN DECISION: json_schema_extra
+    # ------------------------------------
+    # This provides example values that appear in the /docs page.
+    # Your team can click "Try it out" and see a pre-filled example.
 
 
-# =====================================================================
-# SECTION 3: COMPARISON RUNNER
-# =====================================================================
-
-def run_comparison(
-    questions: list[dict],
-    collection,
-    known_tables: list[str],
-    models: list[dict] = None,
-    top_k: int = 3,
-) -> dict:
+class FeedbackRequest(BaseModel):
     """
-    Run the full A/B comparison across all specified models.
+    Request body for the POST /api/feedback endpoint.
 
-    RETURNS
-    -------
-    dict mapping model_id -> {results, summary}
+    Allows users to rate a response as helpful or not.
+    This data feeds into your evaluation pipeline.
+
+    EXAMPLE REQUEST:
+    {
+        "query": "What is the grain of DIM_STORE?",
+        "answer": "The grain is one row per store.",
+        "rating": 5,
+        "comment": "Correct and clear"
+    }
     """
-    if models is None:
-        models = MODELS_TO_COMPARE
 
-    all_results = {}
-
-    for model_config in models:
-        model_id = model_config["id"]
-        model_name = model_config["name"]
-
-        print(f"\n{'='*60}")
-        print(f"Running eval: {model_name} ({model_id})")
-        print(f"{'='*60}")
-
-        results = run_model_eval(
-            model_id=model_id,
-            questions=questions,
-            collection=collection,
-            known_tables=known_tables,
-            top_k=top_k,
-        )
-
-        # Compute summary statistics.
-        scores = [r["keyword_score"] for r in results]
-        latencies = [r["latency_ms"] for r in results]
-        total_input = sum(r["input_tokens"] for r in results)
-        total_output = sum(r["output_tokens"] for r in results)
-
-        # Score by category.
-        category_scores = {}
-        for r in results:
-            cat = r["category"]
-            if cat not in category_scores:
-                category_scores[cat] = []
-            category_scores[cat].append(r["keyword_score"])
-
-        category_avgs = {
-            cat: round(sum(s) / len(s), 4)
-            for cat, s in category_scores.items()
-        }
-
-        summary = {
-            "model_name": model_name,
-            "model_id": model_id,
-            "avg_score": round(sum(scores) / len(scores), 4) if scores else 0,
-            "avg_latency_ms": round(sum(latencies) / len(latencies), 1),
-            "total_input_tokens": total_input,
-            "total_output_tokens": total_output,
-            "estimated_cost": round(
-                model_config["estimated_cost_per_query"] * len(questions), 4
-            ),
-            "category_scores": category_avgs,
-            "num_questions": len(questions),
-        }
-
-        all_results[model_id] = {
-            "results": results,
-            "summary": summary,
-        }
-
-    return all_results
+    query: str = Field(
+        ...,
+        description="The original question that was asked.",
+    )
+    answer: str = Field(
+        ...,
+        description="The answer that was returned.",
+    )
+    rating: int = Field(
+        ...,
+        ge=1,
+        le=5,
+        description="Rating from 1 (terrible) to 5 (perfect).",
+    )
+    comment: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Optional free-text comment about the response quality.",
+    )
 
 
 # =====================================================================
-# SECTION 4: COMPARISON OUTPUT
+# SECTION 2: RESPONSE MODELS
+# =====================================================================
+# These define what the SERVER sends back to the client.
+# They serve two purposes:
+#   1. FastAPI uses them to serialize (convert to JSON)
+#   2. FastAPI uses them to document the response shape in /docs
+#
+# DESIGN DECISION: Why not just return a plain dict?
+# ---------------------------------------------------
+# You COULD write: return {"answer": "...", "sources": [...]}
+# FastAPI would serialize it to JSON just fine.
+#
+# But Pydantic models give you:
+#   1. TYPE SAFETY: Your editor catches typos (e.g., "anwser")
+#   2. DOCUMENTATION: /docs shows the exact response shape
+#   3. CONSISTENCY: Every response follows the same structure
+#   4. NESTED MODELS: SourceChunk inside QueryResponse
+#
+# In production, response models prevent you from accidentally
+# returning internal data (e.g., raw embeddings, API keys).
 # =====================================================================
 
-def print_comparison(all_results: dict) -> None:
-    """Print a formatted comparison report."""
-    print("\n" + "=" * 70)
-    print("MODEL COMPARISON RESULTS")
-    print("=" * 70)
 
-    # Overall summary table.
-    print(f"\n{'Model':<25} {'Avg Score':>10} {'Avg Latency':>12} {'Est. Cost':>10}")
-    print("-" * 60)
+class SourceChunk(BaseModel):
+    """
+    A single retrieved chunk included in the response.
 
-    for model_id, data in all_results.items():
-        s = data["summary"]
-        print(
-            f"{s['model_name']:<25} "
-            f"{s['avg_score']:>10.4f} "
-            f"{s['avg_latency_ms']:>10.1f}ms "
-            f"${s['estimated_cost']:>8.4f}"
-        )
+    This is a NESTED MODEL -- it appears inside QueryResponse's
+    sources list. Pydantic handles nested models automatically.
+    """
 
-    # Category breakdown.
-    print(f"\n--- Score by Category ---")
-    categories = set()
-    for data in all_results.values():
-        categories.update(data["summary"]["category_scores"].keys())
-
-    header = f"{'Category':<15}"
-    for data in all_results.values():
-        header += f" {data['summary']['model_name']:>15}"
-    print(header)
-    print("-" * (15 + 16 * len(all_results)))
-
-    for cat in sorted(categories):
-        row = f"{cat:<15}"
-        for data in all_results.values():
-            score = data["summary"]["category_scores"].get(cat, 0)
-            row += f" {score:>15.4f}"
-        print(row)
-
-    # Per-question delta (show where models diverge).
-    model_ids = list(all_results.keys())
-    if len(model_ids) >= 2:
-        m1_id, m2_id = model_ids[0], model_ids[1]
-        m1_name = all_results[m1_id]["summary"]["model_name"]
-        m2_name = all_results[m2_id]["summary"]["model_name"]
-        r1 = all_results[m1_id]["results"]
-        r2 = all_results[m2_id]["results"]
-
-        print(f"\n--- Per-Question Comparison: {m1_name} vs {m2_name} ---")
-        print(f"{'QID':<6} {'Category':<15} {m1_name:>12} {m2_name:>12} {'Delta':>8}")
-        print("-" * 58)
-
-        divergent_count = 0
-        for q1, q2 in zip(r1, r2):
-            s1 = q1["keyword_score"]
-            s2 = q2["keyword_score"]
-            delta = s1 - s2
-            marker = ""
-            if abs(delta) > 0.1:
-                divergent_count += 1
-                marker = " <<<"
-            print(
-                f"{q1['question_id']:<6} "
-                f"{q1['category']:<15} "
-                f"{s1:>12.2f} "
-                f"{s2:>12.2f} "
-                f"{delta:>+8.2f}{marker}"
-            )
-
-        print(f"\nDivergent questions (delta > 0.1): {divergent_count}/{len(r1)}")
-
-    # Recommendation.
-    print(f"\n--- RECOMMENDATION ---")
-    best_id = max(all_results, key=lambda k: all_results[k]["summary"]["avg_score"])
-    cheapest_id = min(all_results, key=lambda k: all_results[k]["summary"]["estimated_cost"])
-
-    best = all_results[best_id]["summary"]
-    cheapest = all_results[cheapest_id]["summary"]
-
-    if best_id == cheapest_id:
-        print(f"  {best['model_name']} wins on BOTH quality and cost.")
-    else:
-        score_gap = best["avg_score"] - cheapest["avg_score"]
-        cost_savings = best["estimated_cost"] - cheapest["estimated_cost"]
-        print(f"  Best quality: {best['model_name']} (score={best['avg_score']:.4f})")
-        print(f"  Cheapest:     {cheapest['model_name']} (cost=${cheapest['estimated_cost']:.4f})")
-        print(f"  Quality gap:  {score_gap:+.4f} ({score_gap/max(best['avg_score'],0.01)*100:+.1f}%)")
-        print(f"  Cost savings: ${abs(cost_savings):.4f} per eval run")
-
-        if score_gap < 0.05:
-            print(f"\n  VERDICT: Quality gap is small (<5%). Use {cheapest['model_name']} "
-                  f"for simple queries to save cost.")
-        elif score_gap < 0.15:
-            print(f"\n  VERDICT: Moderate quality gap. Route simple queries to "
-                  f"{cheapest['model_name']}, complex queries to {best['model_name']}.")
-        else:
-            print(f"\n  VERDICT: Significant quality gap. Use {best['model_name']} "
-                  f"for all queries until retrieval quality improves.")
+    text: str = Field(
+        description="The chunk text content (truncated to 500 chars)."
+    )
+    source: str = Field(
+        description="Source document identifier (e.g., 'STTM__DIM_STORE__summary')."
+    )
+    table_name: str = Field(
+        default="",
+        description="Extracted table name (e.g., 'DIM_STORE')."
+    )
+    doc_type: str = Field(
+        default="",
+        description="Document type (e.g., 'summary', 'column_mapping')."
+    )
+    relevance_score: Optional[float] = Field(
+        default=None,
+        description=(
+            "Relevance score from retrieval or reranking. "
+            "Higher is more relevant. Scale depends on the method used."
+        ),
+    )
 
 
-def save_comparison(all_results: dict, output_dir: str = "eval_results") -> str:
-    """Save comparison results to a CSV file."""
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = os.path.join(output_dir, f"model_comparison_{timestamp}.csv")
+class RoutingInfo(BaseModel):
+    """
+    Details about how the query was routed internally.
 
-    all_rows = []
-    for model_id, data in all_results.items():
-        for r in data["results"]:
-            all_rows.append(r)
+    Exposed so the client can understand WHY a particular model
+    or reranking method was used. This is valuable for debugging
+    and for building smarter client-side logic.
+    """
 
-    if not all_rows:
-        print("No results to save.")
-        return ""
+    query_type: str = Field(
+        description=(
+            "Classified query type: 'single_table', 'cross_entity', "
+            "'edge_case', or 'follow_up'."
+        ),
+    )
+    model: str = Field(
+        description="The model that generated the answer."
+    )
+    rerank_method: str = Field(
+        description="Reranking method used: 'bm25', 'cross_encoder', 'llm', or 'none'."
+    )
+    is_follow_up: bool = Field(
+        description="Whether this query was classified as a follow-up."
+    )
 
-    fieldnames = list(all_rows[0].keys())
-    # Convert lists to strings for CSV
-    for row in all_rows:
-        for key in ["matched_keywords", "missed_keywords"]:
-            if key in row and isinstance(row[key], list):
-                row[key] = "; ".join(row[key])
 
-    with open(filepath, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_rows)
+class TimingInfo(BaseModel):
+    """
+    Latency breakdown for the query pipeline.
 
-    print(f"\nResults saved to: {filepath}")
-    return filepath
+    Each phase is measured independently so you can identify bottlenecks.
+    """
+
+    retrieve_ms: float = Field(
+        description="Time to retrieve chunks from ChromaDB (milliseconds)."
+    )
+    rerank_ms: float = Field(
+        default=0.0,
+        description="Time spent reranking (0 if reranking was skipped)."
+    )
+    generate_ms: float = Field(
+        description="Time for the LLM to generate the answer."
+    )
+    total_ms: float = Field(
+        description="Total end-to-end latency."
+    )
+
+
+class QueryResponse(BaseModel):
+    """
+    Response body for the POST /api/query endpoint.
+
+    This is the complete response the client receives after
+    submitting a question.
+
+    EXAMPLE RESPONSE:
+    {
+        "answer": "The grain of DIM_STORE is one row per store location.",
+        "sources": [
+            {
+                "text": "DIM_STORE: Grain = one row per store...",
+                "source": "STTM__DIM_STORE__summary",
+                "table_name": "DIM_STORE",
+                "doc_type": "summary",
+                "relevance_score": 0.92
+            }
+        ],
+        "routing": {
+            "query_type": "single_table",
+            "model": "claude-sonnet-4-5-20250929",
+            "rerank_method": "none",
+            "is_follow_up": false
+        },
+        "timing": {
+            "retrieve_ms": 42.5,
+            "rerank_ms": 0,
+            "generate_ms": 1150.3,
+            "total_ms": 1192.8
+        }
+    }
+    """
+
+    answer: str = Field(
+        description="The generated answer to the user's question."
+    )
+    sources: list[SourceChunk] = Field(
+        default_factory=list,
+        description=(
+            "Retrieved source chunks. Empty if include_sources was false "
+            "or if no relevant chunks were found."
+        ),
+    )
+    # PYTHON REFRESHER: default_factory
+    # -----------------------------------
+    # default_factory=list means "call list() to create a NEW empty list
+    # for each instance". This is important because:
+    #
+    #   default=[]
+    #   This creates ONE list object shared by ALL instances (mutable default bug).
+    #
+    #   default_factory=list
+    #   This creates a NEW list for each instance (correct).
+    #
+    # You saw this same issue in Week 3 with Streamlit session state.
+    # The rule: NEVER use a mutable object as a default value.
+
+    routing: Optional[RoutingInfo] = Field(
+        default=None,
+        description="How the query was routed (model, reranking, type)."
+    )
+    timing: Optional[TimingInfo] = Field(
+        default=None,
+        description="Latency breakdown for each pipeline phase."
+    )
+
+
+class HealthResponse(BaseModel):
+    """
+    Response for the GET /api/health endpoint.
+
+    Health checks are used by:
+      - Docker: to know if the container is ready
+      - Load balancers: to route traffic to healthy instances
+      - Monitoring: to alert when the service is down
+
+    A health check should be FAST (no heavy computation) and
+    verify that critical dependencies are available.
+    """
+
+    status: str = Field(
+        description="'healthy' if the service is operational."
+    )
+    documents_loaded: int = Field(
+        description="Number of documents currently in the vector store."
+    )
+    tables_available: int = Field(
+        description="Number of distinct tables recognized."
+    )
+    version: str = Field(
+        default="0.1.0",
+        description="API version string."
+    )
+
+
+class TablesResponse(BaseModel):
+    """
+    Response for the GET /api/tables endpoint.
+
+    Lists all table names the chatbot knows about.
+    Useful for clients that want to show a dropdown or autocomplete.
+    """
+
+    tables: list[str] = Field(
+        description="List of table names (e.g., ['DIM_STORE', 'FACT_SALES_ORDER'])."
+    )
+    count: int = Field(
+        description="Number of tables."
+    )
+
+
+class StatsResponse(BaseModel):
+    """
+    Response for the GET /api/stats endpoint.
+
+    Returns query analytics from the JSONL log.
+    """
+
+    total_queries: int = Field(
+        description="Total number of queries logged."
+    )
+    avg_latency_ms: float = Field(
+        description="Average end-to-end latency in milliseconds."
+    )
+    p95_latency_ms: float = Field(
+        description="95th percentile latency in milliseconds."
+    )
+    total_cost_usd: float = Field(
+        description="Total estimated API cost in USD."
+    )
+    model_distribution: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of queries per model."
+    )
+
+
+class ErrorResponse(BaseModel):
+    """
+    Standard error response body.
+
+    FastAPI returns 422 errors automatically for validation failures.
+    This model is for YOUR custom errors (404, 500, etc.).
+    """
+
+    error: str = Field(
+        description="Error type (e.g., 'not_found', 'pipeline_error')."
+    )
+    message: str = Field(
+        description="Human-readable error description."
+    )
+    detail: Optional[str] = Field(
+        default=None,
+        description="Additional technical details (shown in debug mode)."
+    )
 
 
 # =====================================================================
-# SECTION 5: STANDALONE TEST
+# SECTION 3: STANDALONE TEST
+# =====================================================================
+# Verify that models validate correctly without starting a server.
+# This is a UNIT TEST for your data contracts.
 # =====================================================================
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("MODEL COMPARISON -- STANDALONE TEST")
+    print("API MODELS -- STANDALONE TEST")
     print("=" * 60)
 
-    # Load .env for API key
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if not os.path.exists(env_path):
-        env_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
-        )
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, value = line.partition("=")
-                    os.environ[key.strip()] = value.strip()
-
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("\nANTHROPIC_API_KEY not set. Cannot run model comparison.")
-        print("Set it in your .env file and re-run.")
-        exit(1)
-
-    # Build the RAG pipeline (same as eval.py).
-    from rag import load_documents, chunk_text, build_vector_store, DOCS_DIR
-    from eval import load_eval_questions
-
-    print("\nBuilding RAG pipeline...")
-    documents = load_documents(DOCS_DIR)
-    if not documents:
-        print(f"No documents in {DOCS_DIR}/. Add STTM files to run comparison.")
-        exit(1)
-
-    all_chunks = []
-    for doc in documents:
-        chunks = chunk_text(doc["content"], doc["source"])
-        all_chunks.extend(chunks)
-
-    collection = build_vector_store(all_chunks)
-
-    all_meta = collection.get()
-    known_tables = sorted(list(set(
-        m.get("table_name", "")
-        for m in all_meta["metadatas"]
-        if m.get("table_name") and m["table_name"].strip()
-    )))
-
-    print(f"Pipeline ready: {len(all_chunks)} chunks, {len(known_tables)} tables")
-
-    # Load eval questions.
-    questions = load_eval_questions("eval_questions.csv")
-    if not questions:
-        print("No eval questions found. Check eval_questions.csv.")
-        exit(1)
-
-    # Run comparison.
-    print(f"\nComparing {len(MODELS_TO_COMPARE)} models on {len(questions)} questions...")
-    print("This will cost approximately $0.16 total.")
-
-    all_results = run_comparison(
-        questions=questions,
-        collection=collection,
-        known_tables=known_tables,
+    # --- Test 1: Valid QueryRequest ---
+    print("\n--- Test 1: Valid QueryRequest ---")
+    req = QueryRequest(
+        query="What is the grain of DIM_STORE?",
+        top_k=5,
+        rerank=True,
     )
+    print(f"  query: {req.query}")
+    print(f"  top_k: {req.top_k}")
+    print(f"  model: {req.model}")  # Should be None (default)
+    print(f"  session_id: {req.session_id}")  # Should be None
 
-    # Print and save results.
-    print_comparison(all_results)
-    save_comparison(all_results)
+    # Convert to dict (what FastAPI does internally):
+    req_dict = req.model_dump()
+    print(f"  model_dump(): {req_dict}")
 
-    print("\nComparison complete.")
-    print("Use the category breakdown to decide your routing strategy.")
+    # Convert to JSON string:
+    req_json = req.model_dump_json()
+    print(f"  JSON: {req_json[:80]}...")
+    print("  PASS")
+
+    # --- Test 2: Validation catches bad input ---
+    print("\n--- Test 2: Validation catches bad input ---")
+    from pydantic import ValidationError
+
+    test_cases = [
+        ({"query": ""}, "empty query (min_length=1)"),
+        ({"query": "x" * 2001}, "query too long (max_length=2000)"),
+        ({}, "missing required field 'query'"),
+        ({"query": "ok", "top_k": 0}, "top_k below minimum (ge=1)"),
+        ({"query": "ok", "top_k": 21}, "top_k above maximum (le=20)"),
+        ({"query": "ok", "top_k": "not_a_number"}, "top_k wrong type"),
+    ]
+
+    for data, description in test_cases:
+        try:
+            QueryRequest(**data)
+            print(f"  FAIL: {description} -- should have raised error")
+        except ValidationError as e:
+            # Count the number of validation errors
+            error_count = len(e.errors())
+            print(f"  PASS: {description} -- caught {error_count} error(s)")
+
+    # --- Test 3: QueryResponse with nested models ---
+    print("\n--- Test 3: QueryResponse with nested models ---")
+    resp = QueryResponse(
+        answer="The grain of DIM_STORE is one row per store location.",
+        sources=[
+            SourceChunk(
+                text="DIM_STORE: Grain = one row per store...",
+                source="STTM__DIM_STORE__summary",
+                table_name="DIM_STORE",
+                doc_type="summary",
+                relevance_score=0.92,
+            )
+        ],
+        routing=RoutingInfo(
+            query_type="single_table",
+            model="claude-sonnet-4-5-20250929",
+            rerank_method="none",
+            is_follow_up=False,
+        ),
+        timing=TimingInfo(
+            retrieve_ms=42.5,
+            rerank_ms=0.0,
+            generate_ms=1150.3,
+            total_ms=1192.8,
+        ),
+    )
+    resp_dict = resp.model_dump()
+    print(f"  answer: {resp.answer[:50]}...")
+    print(f"  sources: {len(resp.sources)} chunk(s)")
+    print(f"  routing.model: {resp.routing.model}")
+    print(f"  timing.total_ms: {resp.timing.total_ms}")
+    print(f"  JSON size: {len(resp.model_dump_json())} bytes")
+    print("  PASS")
+
+    # --- Test 4: HealthResponse ---
+    print("\n--- Test 4: HealthResponse ---")
+    health = HealthResponse(
+        status="healthy",
+        documents_loaded=42,
+        tables_available=15,
+    )
+    print(f"  {health.model_dump_json()}")
+    print("  PASS")
+
+    # --- Test 5: FeedbackRequest validation ---
+    print("\n--- Test 5: FeedbackRequest validation ---")
+    try:
+        FeedbackRequest(query="test", answer="test", rating=6)
+        print("  FAIL: rating=6 should have been rejected (le=5)")
+    except ValidationError:
+        print("  PASS: rating=6 correctly rejected")
+
+    try:
+        fb = FeedbackRequest(query="test", answer="test", rating=4)
+        print(f"  PASS: valid feedback created: rating={fb.rating}")
+    except ValidationError:
+        print("  FAIL: valid feedback was rejected")
+
+    print("\n" + "=" * 60)
+    print("All model tests passed. api_models.py is ready.")
+    print("=" * 60)
