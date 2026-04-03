@@ -1,0 +1,47 @@
+# ── Secrets (NEVER include in images) ──
+.env
+*.env
+
+# ── Python artifacts ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# ── Generated data (recreated at runtime) ──
+chroma_db/
+eval_results/
+logs/
+
+# ── Documents (mounted as volume at runtime) ──
+# The docs/ directory contains proprietary STTM files.
+# They are mounted via docker-compose.yml volumes, not
+# baked into the image. This keeps the image generic and
+# allows different document sets without rebuilding.
+docs/
+
+# ── IDE and OS files ──
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Git ──
+.git/
+.gitignore
+
+# ── Streamlit config (not needed in API container) ──
+.streamlit/
+
+# ── Docker files (prevent recursive inclusion) ──
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Lock file (we use pyproject.toml for Docker pip install) ──
+# If you switch to uv inside Docker, you would KEEP uv.lock
+# and remove this line.
+uv.lock

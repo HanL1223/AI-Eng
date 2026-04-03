@@ -7,9 +7,9 @@ PYTHONDONTWRITEBYTECODE=1
 
 #System deencencies
 RUN apt-get update && \
-    apt-get install-y --no-install-recommends \
+    apt-get install -y --no-install-recommends \
         build-essential \
-        curl
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -21,7 +21,7 @@ WORKDIR /app
 COPY pyproject.toml .
 
 #install python depencencies
-RUN pip install --no-chache-dir .
+RUN pip install --no-cache-dir .
 
 #Copy sourec code
 COPY . .

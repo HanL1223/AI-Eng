@@ -1,1 +1,63 @@
+# Instead of:
+#   docker run -p 8000:8000 --env-file .env -v ./docs:/app/docs \
+#     -v ./logs:/app/logs --name sttm-api sttm-rag-api
+
+# use compose file and run:
+#   docker compose up
+#
+# Docker Compose reads this file and creates all the containers,
+# networks, and volumes automatically.
+
+
+#Services configuartion
+#Each service is a docker container, the service name(eg api) is also the hostname
+#So we can reach http://api:8000
 services:
+
+  #Build config  tell docker what to use.context = current dir, dockerfile = Dockerfile
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    #image
+    #Name the build image so we can reference without rebuilding
+    image: sttm-rag-api:latest
+
+    #Container Name
+    #give a fixed, readable name
+    container_name: sttm-rag-api
+
+    #Port Mapping
+    #ensure container listen on port 8000 from local 8000
+    ports:
+      - "8000:8000"
+    #Environment variable pass secrets and confirm without baking them into image
+    
+    env_file:
+      - .env
+
+    volumes:
+    # Mount host directories into the container. Changes in either
+    # direction are immediately visible.
+    #left(current dir) right container dir 
+      - ./docs:/app/docs
+      - ./logs:/app/logs
+    
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    
+
+    
