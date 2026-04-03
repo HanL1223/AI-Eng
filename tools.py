@@ -285,4 +285,28 @@ def execute_retrieve_table_info(
         top_k=top_k
     )
 
+    if doc_type_filter and chunks:
+        filtered = [c for c in chunks if c.get("doc_type") == doc_type_filter]
+        #Fall back to unfiltered if doc_type filter removes everythings
+        if filtered:
+            chunks = filtered
+    duration_ms = (time.time()) - start_time * 1000
+
+    if not chunks:
+        logger.info(
+            json.dumps({
+                "event": "tool_no_results",
+                "tool": "retrieve_table_info",
+                "table_name": table_name,
+                "info_type": info_type,
+                "duration_ms": round(duration_ms, 1),
+            })
+        )
+        return (
+            f"No {info_type} documentation found for table '{table_name}'. "
+            f"The table exists but may not have {info_type} information "
+            f"in the loaded STTM workbooks."
+        )
+    
+
             
